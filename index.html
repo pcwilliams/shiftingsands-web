@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Shifting Sands</title>
+  <meta name="description" content="An hourglass timer with a real-time granular physics simulation: up to 200,000 sand grains simulated in WebGPU compute shaders and drawn with three.js.">
+  <meta name="theme-color" content="#070605">
+  <meta name="color-scheme" content="dark">
+  <meta property="og:title" content="Shifting Sands">
+  <meta property="og:description" content="An hourglass timer with real-time granular physics, in WebGPU and three.js.">
+  <meta property="og:image" content="docs/shiftingsands-web.png">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="css/style.css">
+  <!--
+    No build step: the browser resolves these bare module names itself.
+    "three" points at the WebGPU build, which also contains the WebGL 2
+    fallback renderer and TSL.
+  -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.webgpu.js",
+        "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.webgpu.js",
+        "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.tsl.js"
+      }
+    }
+  </script>
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <canvas id="scene" role="img" aria-label="A glass hourglass filled with golden sand"></canvas>
+
+  <div class="hud top-left">
+    <label class="toggle"><input type="checkbox" id="colors"><span>Colours</span></label>
+    <label class="toggle" id="sleep-view-row"><input type="checkbox" id="sleep-view"><span>Sleep view</span></label>
+    <label class="toggle"><input type="checkbox" id="stats-toggle"><span>Stats</span></label>
+    <pre id="stats" hidden></pre>
+  </div>
+
+  <div class="hud top-right">
+    <div class="segmented" role="radiogroup" aria-label="Physics mode" id="mode">
+      <button type="button" role="radio" data-value="cpu" title="JavaScript on the main thread">CPU</button>
+      <button type="button" role="radio" data-value="gpu" title="WebGPU compute, read back to JavaScript each frame">GPU</button>
+      <button type="button" role="radio" data-value="direct" title="WebGPU compute feeding the draw call directly">Direct</button>
+    </div>
+    <div class="segmented small" role="radiogroup" aria-label="Collision search" id="broadphase">
+      <button type="button" role="radio" data-value="grid" title="Spatial hash grid: each grain checks only its neighbours">Grid</button>
+      <button type="button" role="radio" data-value="brute" title="All pairs: each grain checks every other grain, as the iOS app does">N²</button>
+    </div>
+    <label class="slider">
+      <span id="size-label">Size: 1.00x</span>
+      <input type="range" id="size" min="0.5" max="1.5" step="0.05" value="1">
+    </label>
+    <label class="slider">
+      <span id="count-label">10k particles</span>
+      <input type="range" id="count" min="0" max="1000" step="1" value="500">
+    </label>
+  </div>
+
+  <output class="hud bottom-left readout" id="readout" aria-label="Time remaining">0:05</output>
+
+  <div class="hud bottom-right">
+    <label class="slider">
+      <span id="duration-label">5s</span>
+      <input type="range" id="duration" min="5" max="30" step="5" value="5">
+    </label>
+    <div class="presets" id="presets">
+      <button type="button" data-seconds="5">5s</button>
+      <button type="button" data-seconds="10">10s</button>
+      <button type="button" data-seconds="30">30s</button>
+    </div>
+    <button type="button" class="start" id="start">Start</button>
+  </div>
+
+  <p class="notice" id="notice" role="status" hidden></p>
+
+  <nav class="doc-links" aria-label="About this project">
+    <a href="tutorial.html">Tutorial</a>
+    <a href="architecture.html">Architecture</a>
+    <a href="gpu-tests.html">GPU tests</a>
+    <a href="https://github.com/pcwilliams/shiftingsands-web">Source</a>
+  </nav>
+</body>
+</html>

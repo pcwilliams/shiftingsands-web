@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shifting Sands Web Architecture</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root {
+  --bg: #0b0a08;
+  --panel: #17150f;
+  --panel-2: #211e16;
+  --text: #ece6d8;
+  --muted: #a59d8c;
+  --accent: #d9a441;
+  --cool: #7fb2e5;
+  --border: #2e2a20;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.55; }
+.container { max-width: 960px; margin: 0 auto; padding: 40px 16px 80px; }
+.hero { text-align: center; margin-bottom: 24px; }
+.hero h1 { font-size: clamp(26px, 6vw, 36px); letter-spacing: 2px; margin: 12px 0 4px; font-weight: 900; text-transform: uppercase; }
+.hero p { color: var(--muted); margin: 0; font-size: 14px; }
+.badges { display: flex; justify-content: center; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+.badge { display: inline-block; padding: 4px 10px; border: 1px solid var(--border); border-radius: 12px; font-size: 11px; color: var(--muted); }
+.shots { display: flex; gap: 28px; justify-content: center; align-items: center; flex-wrap: wrap; margin: 30px 0 40px; }
+.browser-frame { flex: 1 1 520px; max-width: 620px; background: #000; border-radius: 14px; padding: 28px 8px 8px; position: relative;
+  box-shadow: 0 30px 60px rgba(0,0,0,0.55), 0 0 0 2px #2a2a2a; }
+.browser-frame::before { content: ""; position: absolute; top: 10px; left: 14px; width: 42px; height: 9px;
+  background: radial-gradient(circle at 4px 4.5px, #ff5f57 4px, transparent 4.5px), radial-gradient(circle at 21px 4.5px, #febc2e 4px, transparent 4.5px), radial-gradient(circle at 38px 4.5px, #28c840 4px, transparent 4.5px); }
+.browser-frame img { width: 100%; display: block; border-radius: 6px; }
+.phone-frame { width: 200px; padding: 8px; background: #000; border-radius: 36px; box-shadow: 0 30px 60px rgba(0,0,0,0.55), 0 0 0 2px #2a2a2a; }
+.phone-frame img { width: 100%; border-radius: 28px; display: block; }
+h2 { border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-top: 56px; font-size: 24px; letter-spacing: 0.5px; }
+h3 { color: var(--accent); margin-top: 32px; font-size: 18px; }
+p, li { color: var(--muted); }
+.diagram { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin: 20px 0; overflow-x: auto; }
+.diagram .caption { font-size: 12px; color: var(--muted); margin-top: 10px; font-style: italic; text-align: center; }
+code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; color: var(--text); }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; display: block; overflow-x: auto; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--text); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+td { color: var(--muted); }
+.bytes { display: grid; grid-template-columns: repeat(8, 1fr); gap: 4px; margin: 16px 0 6px; font: 12px ui-monospace, Menlo, monospace; text-align: center; }
+.bytes div { padding: 10px 2px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+.bytes .pos { border-color: var(--accent); }
+.bytes .vel { border-color: var(--cool); }
+footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 60px; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="hero">
+    <h1>Shifting Sands · Web</h1>
+    <p>Architecture of the WebGPU hourglass</p>
+    <div class="badges">
+      <span class="badge">three.js r186 WebGPURenderer</span>
+      <span class="badge">WGSL compute</span>
+      <span class="badge">TSL materials</span>
+      <span class="badge">No build step</span>
+      <span class="badge">69 node + 15 GPU tests</span>
+    </div>
+  </div>
+
+  <div class="shots">
+    <div class="browser-frame"><img src="docs/shiftingsands-web.png" alt="The hourglass in a desktop browser, sand starting to pour"></div>
+    <div class="phone-frame"><img src="docs/shiftingsands-web-phone.png" alt="The hourglass at phone width with random colours"></div>
+  </div>
+
+  <p>The page has two halves that share one GPU device. three.js owns the picture: scene graph, camera, lights, materials. A small engine written against the raw WebGPU API owns the physics. They meet at a single buffer of particles.</p>
+
+  <h2>Modules</h2>
+  <div class="diagram">
+    <pre class="mermaid">
+graph TD
+  main["main.js<br/>device, wiring, frame loop"]
+  subgraph UI
+    controls["ui/controls.js"]
+  end
+  subgraph Services
+    store["settingsStore.js"]
+    timer["timerModel.js"]
+    args["launchArgs.js"]
+  end
+  subgraph Scene
+    scene["scene/hourglassScene.js<br/>three.js WebGPURenderer"]
+  end
+  subgraph Physics
+    cpu["cpuSimulation.js"]
+    gpu["gpuPhysics.js<br/>raw WebGPU"]
+    wgsl["shaders.js<br/>WGSL text"]
+  end
+  subgraph Models["Models (pure, unit-tested)"]
+    profile["hourglassProfile.js"]
+    packing["packing.js"]
+    config["physicsConfig.js"]
+    grid["grid.js"]
+  end
+  main --> controls
+  main --> store
+  main --> timer
+  main --> args
+  main --> scene
+  controls --> store
+  controls --> timer
+  scene --> cpu
+  scene --> gpu
+  gpu --> wgsl
+  scene --> profile
+  scene --> packing
+  cpu --> profile
+  cpu --> packing
+  gpu --> grid
+  wgsl --> grid
+  cpu --> config
+  gpu --> config
+    </pre>
+    <div class="caption">Arrows point from a module to what it imports. Nothing in Models imports three.js or touches the DOM.</div>
+  </div>
+
+  <table>
+    <tr><th>Swift file</th><th>Web module</th><th>What changed</th></tr>
+    <tr><td><code>SandGeometry.swift</code></td><td><code>models/hourglassProfile.js</code></td><td>The profile is a value returned by <code>createProfile()</code>, not static state.</td></tr>
+    <tr><td><code>GranularSimulation.swift</code></td><td><code>physics/cpuSimulation.js</code>, <code>models/packing.js</code></td><td>State is one <code>Float32Array</code> in the shared layout.</td></tr>
+    <tr><td><code>ParticlePhysics.metal</code></td><td><code>physics/shaders.js</code></td><td>WGSL. Two neighbour-search flavours. No mesh expansion kernel.</td></tr>
+    <tr><td><code>MetalPhysicsEngine.swift</code></td><td><code>physics/gpuPhysics.js</code></td><td>Asynchronous. One submit per frame. Hash grid buffers added.</td></tr>
+    <tr><td><code>HourglassScene.swift</code></td><td><code>scene/hourglassScene.js</code></td><td>Instanced drawing replaces per-particle nodes and expanded meshes.</td></tr>
+    <tr><td><code>HourglassSceneView.swift</code> (Coordinator)</td><td><code>main.js</code></td><td>One thread, so no lock.</td></tr>
+    <tr><td><code>TimerViewModel.swift</code></td><td><code>services/timerModel.js</code>, <code>services/settingsStore.js</code></td><td>Split into timing and persistence.</td></tr>
+    <tr><td><code>ContentView.swift</code></td><td><code>index.html</code>, <code>ui/controls.js</code>, <code>services/launchArgs.js</code></td><td>Launch arguments become URL parameters.</td></tr>
+  </table>
+
+  <h2>One particle, three homes</h2>
+  <p>A particle is eight floats. The CPU simulation's array, the WGSL struct and the instanced vertex buffer all use this layout, so the same 32 bytes can be moved between them without being reinterpreted.</p>
+  <div class="bytes" role="img" aria-label="Eight floats: x, y, z, radius, velocity x, y, z, sleep counter">
+    <div class="pos">x</div><div class="pos">y</div><div class="pos">z</div><div class="pos">radius</div>
+    <div class="vel">vx</div><div class="vel">vy</div><div class="vel">vz</div><div class="vel">sleep</div>
+  </div>
+  <table>
+    <tr><th>Where</th><th>How it is declared</th></tr>
+    <tr><td>JavaScript</td><td><code>Float32Array</code>, <code>STRIDE = 8</code></td></tr>
+    <tr><td>WGSL</td><td><code>struct Particle { posRadius: vec4f, velSleep: vec4f }</code></td></tr>
+    <tr><td>Vertex shader</td><td>Instance attributes <code>instancePosRadius</code> (offset 0) and <code>instanceVelSleep</code> (offset 4) on one interleaved buffer</td></tr>
+  </table>
+
+  <h2>Three ways to fill the vertex buffer</h2>
+  <p>All three modes end in the same draw call: one icosphere, drawn once per particle. They differ only in how the per-instance buffer gets its contents.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+graph TD
+  subgraph CPUMODE["CPU mode"]
+    c1["CpuSimulation.step<br/>JavaScript"] --> c2["Float32Array"]
+    c2 -->|"upload"| c3["Vertex buffer"]
+  end
+  subgraph GPUMODE["GPU mode"]
+    g1["Compute pass"] --> g2["Particle buffer"]
+    g2 -->|"copy + mapAsync<br/>one frame late"| g3["Float32Array"]
+    g3 -->|"upload"| g4["Vertex buffer"]
+  end
+  subgraph DIRECT["Direct mode"]
+    d1["Compute pass"] --> d2["Particle buffer"]
+    d2 -->|"copyBufferToBuffer<br/>on the GPU"| d3["Vertex buffer"]
+  end
+  c3 --> draw["Instanced draw"]
+  g4 --> draw
+  d3 --> draw
+    </pre>
+    <div class="caption">GPU mode sends every particle from the GPU to JavaScript and back again. Direct mode skips the round trip.</div>
+  </div>
+
+  <h2>One frame in Direct mode</h2>
+  <div class="diagram">
+    <pre class="mermaid">
+sequenceDiagram
+  participant JS as main.js
+  participant E as GpuPhysics
+  participant Q as GPU queue
+  participant T as three.js
+  JS->>E: step(dt, vertexBuffer)
+  E->>Q: writeBuffer(uniforms)
+  Note over E: one command encoder
+  loop each substep
+    E->>E: clearBuffer(bucket counts)
+    E->>E: pass: buildGrid
+    E->>E: pass: physicsStep, A to B
+    E->>E: swap A and B
+  end
+  E->>E: copyBufferToBuffer(particles to vertex buffer)
+  E->>Q: submit
+  JS->>T: render(scene, camera)
+  T->>Q: submit draw
+  Note over Q: runs in submission order,<br/>so the draw sees the copy
+    </pre>
+    <div class="caption">JavaScript never waits for the GPU. It records work and returns; the queue keeps the order.</div>
+  </div>
+
+  <h2>Inside the physics kernel</h2>
+  <div class="diagram">
+    <pre class="mermaid">
+graph TD
+  start["Read my particle from the snapshot"] --> deep{"Deep sleep?<br/>counter over 30"}
+  deep -->|"yes, not my turn"| frozen["Write unchanged"]
+  deep -->|"yes, my turn"| support{"Still supported?"}
+  support -->|"yes"| frozen
+  support -->|"no"| awake
+  deep -->|"no"| light{"Light sleep?<br/>counter over 15"}
+  light -->|"yes"| hit{"Awake neighbour<br/>hitting me?"}
+  hit -->|"no"| frozen
+  hit -->|"yes"| awake
+  light -->|"no"| awake["Gravity, move"]
+  awake --> wall["Glass wall, floor, ceiling"]
+  wall --> spheres["Neighbours: push apart<br/>lower chamber also exchanges velocity"]
+  spheres --> damp["Neck friction, damping"]
+  damp --> counter["Update sleep counter"]
+  counter --> write["Write my particle"]
+    </pre>
+    <div class="caption">Every thread reads the same snapshot and writes only its own particle. The three "neighbours" steps are where brute force and the grid differ.</div>
+  </div>
+
+  <h3>The spatial hash</h3>
+  <table>
+    <tr><th>Step</th><th>What happens</th></tr>
+    <tr><td>Clear</td><td><code>encoder.clearBuffer</code> zeroes one counter per bucket.</td></tr>
+    <tr><td>Build</td><td>One thread per particle: hash its cell, <code>atomicAdd</code> the bucket counter to claim a slot, write its index there.</td></tr>
+    <tr><td>Lookup</td><td>For each of the 27 cells around me: hash it, walk up to 8 slots, skip anything whose real cell isn't this one.</td></tr>
+  </table>
+  <p>Table size is the next power of two above twice the particle count, so memory follows the count and not the volume of the glass.</p>
+
+  <h2>Timer</h2>
+  <div class="diagram">
+    <pre class="mermaid">
+stateDiagram-v2
+  [*] --> idle
+  idle --> flipping: Start
+  flipping --> running: flip lands (1.2 s)
+  running --> complete: elapsed reaches duration
+  complete --> flipping: Start
+  flipping --> idle: Reset (respawn)
+  running --> idle: Reset (respawn)
+    </pre>
+    <div class="caption">The start is two-phase so the countdown begins when the flip lands, not when the button is pressed.</div>
+  </div>
+
+  <h2>Scene graph</h2>
+  <div class="diagram">
+    <pre class="mermaid">
+graph TD
+  root["Scene"] --> container["Group: container<br/>rotates during the flip"]
+  root --> camera["PerspectiveCamera, FOV 40"]
+  root --> lights["4 directional, 1 point, 1 hemisphere"]
+  container --> glass["Glass: surface of revolution<br/>TSL Fresnel opacity, no depth write"]
+  container --> caps["2 wooden caps"]
+  container --> sand["Sand: icosphere x N instances<br/>positionNode = local * radius + position"]
+    </pre>
+    <div class="caption">Camera and lights sit outside the container, so they stay put while the hourglass turns.</div>
+  </div>
+
+  <footer>
+    <a href="./">Open the hourglass</a> · <a href="tutorial.html">Tutorial</a> · <a href="gpu-tests.html">GPU tests</a> · <a href="https://github.com/pcwilliams/shiftingsands-web">Source</a>
+  </footer>
+</div>
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      darkMode: true,
+      background: '#17150f',
+      primaryColor: '#211e16',
+      primaryTextColor: '#ece6d8',
+      primaryBorderColor: '#d9a441',
+      lineColor: '#a59d8c',
+      secondaryColor: '#17150f',
+      tertiaryColor: '#17150f',
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      fontSize: '14px',
+    },
+  });
+</script>
+</body>
+</html>

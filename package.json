@@ -1,0 +1,14 @@
+{
+  "name": "shiftingsands-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hourglass timer with a real-time granular physics simulation, for the web. three.js WebGPURenderer plus hand-written WGSL compute. No build step.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "serve": "python3 -m http.server 8000"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,206 @@
+:root {
+  --bg: #070605;
+  --ink: rgba(255, 255, 255, 0.86);
+  --ink-soft: rgba(255, 255, 255, 0.62);
+  --fill: rgba(255, 255, 255, 0.10);
+  --fill-strong: rgba(255, 255, 255, 0.24);
+  --sand: #d9a441;
+  --edge: max(16px, env(safe-area-inset-left));
+  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font: 500 12px/1.3 var(--ui);
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+#scene {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+/* The four corners, as in the app. */
+.hud {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 1;
+}
+.top-left { top: max(12px, env(safe-area-inset-top)); left: var(--edge); align-items: flex-start; }
+.top-right { top: max(12px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right)); align-items: flex-end; }
+.bottom-left { bottom: max(44px, calc(env(safe-area-inset-bottom) + 34px)); left: var(--edge); }
+.bottom-right { bottom: max(44px, calc(env(safe-area-inset-bottom) + 34px)); right: max(16px, env(safe-area-inset-right)); align-items: flex-end; gap: 12px; }
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  min-height: 24px;
+}
+.toggle input {
+  appearance: none;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border-radius: 10px;
+  background: var(--fill);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.toggle input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.8);
+  transition: transform 0.15s;
+}
+.toggle input:checked { background: color-mix(in srgb, var(--sand) 75%, transparent); }
+.toggle input:checked::after { transform: translateX(14px); }
+
+#stats {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: var(--ink-soft);
+  font: 11px/1.5 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+  pointer-events: none;
+}
+
+.segmented {
+  display: flex;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--fill);
+  width: 200px;
+}
+.segmented.small { width: 132px; }
+.segmented button {
+  flex: 1;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--ink-soft);
+  font: 600 12px var(--ui);
+  cursor: pointer;
+}
+.segmented button[aria-checked="true"] { background: var(--fill-strong); color: #fff; }
+.segmented button:disabled { opacity: 0.35; cursor: not-allowed; }
+.segmented[hidden] { display: none; }
+
+.slider {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.slider input { width: 160px; margin: 0; accent-color: #cfc9bd; cursor: pointer; }
+.slider input:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.readout {
+  font: 200 48px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+}
+
+.presets { display: flex; gap: 8px; }
+.presets button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--fill);
+  color: #fff;
+  font: 500 14px var(--ui);
+  cursor: pointer;
+}
+.presets button[aria-pressed="true"] { background: rgba(255, 255, 255, 0.3); }
+.presets button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.start {
+  width: 120px;
+  height: 48px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font: 600 18px var(--ui);
+  cursor: pointer;
+}
+.start:hover { background: rgba(255, 255, 255, 0.28); }
+.start:active { background: rgba(255, 255, 255, 0.36); }
+
+.notice {
+  position: fixed;
+  left: 50%;
+  top: max(12px, env(safe-area-inset-top));
+  transform: translateX(-50%);
+  width: min(360px, calc(100vw - 32px));
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(30, 24, 14, 0.92);
+  border: 1px solid color-mix(in srgb, var(--sand) 45%, transparent);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: center;
+  z-index: 2;
+}
+.notice[hidden] { display: none; }
+
+.doc-links {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: max(10px, env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  z-index: 1;
+}
+.doc-links a { color: rgba(255, 255, 255, 0.42); text-decoration: none; padding: 4px 0; }
+.doc-links a:hover { color: var(--sand); }
+
+:focus-visible { outline: 2px solid var(--sand); outline-offset: 2px; }
+
+/* Phones in portrait: the notice would cover the top controls, so drop it. */
+@media (max-width: 560px) {
+  .notice { top: auto; bottom: 150px; }
+  .segmented { width: 168px; }
+  .segmented.small { width: 112px; }
+  .slider input { width: 136px; }
+  .readout { font-size: 40px; }
+}
+
+@media (max-height: 520px) {
+  .hud { gap: 6px; }
+  .readout { font-size: 34px; }
+  .start { height: 40px; }
+}

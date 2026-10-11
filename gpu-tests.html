@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shifting Sands: GPU physics tests</title>
+<meta name="color-scheme" content="dark">
+<style>
+  body { margin: 0; padding: 24px 16px 60px; background: #0c0b09; color: #ece6d8;
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
+  p { color: #a59d8c; margin: 0 0 20px; }
+  ol { list-style: none; padding: 0; margin: 0; border-top: 1px solid #2b2822; }
+  li { display: grid; grid-template-columns: 5ch 1fr auto; gap: 12px; padding: 8px 0;
+    border-bottom: 1px solid #2b2822; align-items: baseline; }
+  .mark { font: 600 12px ui-monospace, Menlo, monospace; letter-spacing: 1px; }
+  .pass .mark { color: #9bd17a; }
+  .fail .mark { color: #ff7a66; }
+  .note { color: #a59d8c; font-size: 13px; display: block; overflow-wrap: anywhere; }
+  .ms { color: #6f6a5e; font: 12px ui-monospace, Menlo, monospace; }
+  #summary { margin-top: 20px; font-weight: 600; }
+  a { color: #d9a441; }
+</style>
+</head>
+<body>
+<main>
+  <h1>GPU physics tests</h1>
+  <p>The WGSL compute kernels, run on this device's GPU: ports of the app's <code>GPUPhysicsTests.swift</code>, once per broadphase. <a href="./">Back to the hourglass</a></p>
+  <ol id="results"></ol>
+  <div id="summary">Running…</div>
+</main>
+<script type="module">
+  import { runGpuSelfTest } from './js/dev/gpuSelfTest.js';
+
+  const list = document.getElementById('results');
+  const summary = document.getElementById('summary');
+
+  function row({ name, pass, note, ms }) {
+    const li = document.createElement('li');
+    li.className = pass ? 'pass' : 'fail';
+    const mark = Object.assign(document.createElement('span'), { className: 'mark', textContent: pass ? 'PASS' : 'FAIL' });
+    const body = document.createElement('span');
+    body.textContent = name;
+    if (note) body.append(Object.assign(document.createElement('span'), { className: 'note', textContent: note }));
+    const time = Object.assign(document.createElement('span'), { className: 'ms', textContent: `${ms} ms` });
+    li.append(mark, body, time);
+    list.append(li);
+  }
+
+  try {
+    if (!navigator.gpu) throw new Error('This browser has no WebGPU (navigator.gpu is missing).');
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) throw new Error('WebGPU is present but no GPU adapter is available.');
+    const device = await adapter.requestDevice();
+    const results = await runGpuSelfTest(device, row);
+    const failed = results.filter((r) => !r.pass).length;
+    summary.textContent = failed ? `${failed} of ${results.length} failed` : `All ${results.length} passed`;
+    window.gpuTestResults = results;
+  } catch (error) {
+    summary.textContent = error.message;
+    window.gpuTestResults = [{ name: 'setup', pass: false, note: error.message }];
+  }
+</script>
+</body>
+</html>

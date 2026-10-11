@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building Shifting Sands Web</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+:root {
+  --bg: #0b0a08;
+  --panel: #17150f;
+  --panel-2: #211e16;
+  --text: #ece6d8;
+  --muted: #a59d8c;
+  --accent: #d9a441;
+  --border: #2e2a20;
+  --prompt-bg: #151a12;
+  --prompt-border: #9bd17a;
+  --ref-bg: #1f1810;
+  --ref-border: #d9a441;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.container { max-width: 820px; margin: 0 auto; padding: 40px 16px 80px; }
+.hero { text-align: center; margin-bottom: 24px; }
+.hero h1 { font-size: clamp(24px, 6vw, 36px); letter-spacing: 2px; margin: 12px 0 4px; font-weight: 900; text-transform: uppercase; }
+.hero p { color: var(--muted); margin: 0; font-size: 14px; }
+.browser-frame { margin: 30px auto 40px; max-width: 640px; background: #000; border-radius: 14px; padding: 8px;
+  box-shadow: 0 30px 60px rgba(0,0,0,0.55), 0 0 0 2px #2a2a2a; }
+.browser-frame img { width: 100%; display: block; border-radius: 8px; }
+h2 { border-bottom: 1px solid var(--border); padding-bottom: 6px; margin-top: 48px; font-size: 22px; letter-spacing: 0.5px; }
+h3 { color: var(--accent); margin-top: 30px; font-size: 16px; }
+.prompt { background: var(--prompt-bg); border-left: 3px solid var(--prompt-border); padding: 14px 18px; margin: 14px 0 18px;
+  border-radius: 0 8px 8px 0; font-style: italic; }
+.prompt .who { font-style: normal; color: var(--prompt-border); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; display: block; margin-bottom: 6px; }
+.reference { background: var(--ref-bg); border-left: 3px solid var(--ref-border); padding: 14px 18px; margin: 14px 0 18px; border-radius: 0 8px 8px 0; color: var(--muted); line-height: 1.6; }
+.reference .who { color: var(--ref-border); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; display: block; margin-bottom: 6px; }
+p { color: var(--muted); line-height: 1.6; }
+ul, ol { color: var(--muted); line-height: 1.7; }
+strong { color: var(--text); }
+code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; color: var(--text); }
+pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow-x: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; line-height: 1.5; color: var(--text); }
+pre code { background: none; padding: 0; }
+table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; display: block; overflow-x: auto; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--text); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+td { color: var(--muted); }
+.toc { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px 14px 36px; }
+footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 60px; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="hero">
+    <h1>Building Shifting Sands · Web</h1>
+    <p>How an iOS Metal particle simulation became a WebGPU page, and how each piece works</p>
+  </div>
+
+  <div class="browser-frame"><img src="docs/shiftingsands-web.png" alt="The finished hourglass, sand starting to pour through the neck"></div>
+
+  <ol class="toc">
+    <li><a href="#pitch">The pitch and four questions</a></li>
+    <li><a href="#gpu">How a web page talks to a GPU</a></li>
+    <li><a href="#pure">Port the pure layer first</a></li>
+    <li><a href="#scene">Drawing the hourglass with three.js</a></li>
+    <li><a href="#instancing">Drawing 200,000 spheres: instancing</a></li>
+    <li><a href="#compute">Physics on the GPU: a compute shader</a></li>
+    <li><a href="#parallel">Why parallel physics is harder</a></li>
+    <li><a href="#readback">Readback, and avoiding it</a></li>
+    <li><a href="#grid">Getting rid of N²: a spatial hash</a></li>
+    <li><a href="#testing">Testing a GPU program</a></li>
+    <li><a href="#found">Things found along the way</a></li>
+    <li><a href="#next">What wasn't measured, and what to try next</a></li>
+  </ol>
+
+  <h2 id="pitch">1. The pitch and four questions</h2>
+  <div class="prompt">
+    <span class="who">Prompt</span>
+    You did a great job with bttfclock-web, converting from macOS app bttfclock. I wonder if you could do something similar in new repo shiftingsands-web, converting from iOS app shiftingsands. I would like to learn how it is possible to do the rendering of something like this for web (presumably three.js?) and how you could do the physics particle simulation in some accelerated way on web (webgpu perhaps? Please teach me!).
+  </div>
+  <p>The iOS app's <code>CLAUDE.md</code> and its 408-line Metal file described everything needed. Four choices would shape the whole project, so they were asked first:</p>
+  <ul>
+    <li><strong>Renderer?</strong> three.js's WebGPURenderer for the scene, with the physics written by hand in WGSL on the same GPU device, so the kernel reads as a port of <code>ParticlePhysics.metal</code>.</li>
+    <li><strong>Physics modes?</strong> Mirror all three: CPU, GPU with readback, and GPU with no readback.</li>
+    <li><strong>Collisions?</strong> Both: the app's all-pairs loop, and a spatial grid to compare it with.</li>
+    <li><strong>Extras?</strong> GitHub Pages, URL parameters and Node tests.</li>
+  </ul>
+
+  <h2 id="gpu">2. How a web page talks to a GPU</h2>
+  <p>There are two browser APIs. <strong>WebGL 2</strong> is OpenGL ES 3.0: it can draw triangles but has no compute shaders. <strong>WebGPU</strong> is the newer one, designed as a common layer over Metal, Direct3D 12 and Vulkan. If you know Metal, WebGPU will feel familiar.</p>
+  <table>
+    <tr><th>Metal</th><th>WebGPU</th></tr>
+    <tr><td><code>MTLCreateSystemDefaultDevice()</code></td><td><code>await navigator.gpu.requestAdapter()</code> then <code>await adapter.requestDevice()</code></td></tr>
+    <tr><td><code>MTLCommandQueue</code></td><td><code>device.queue</code></td></tr>
+    <tr><td><code>MTLBuffer</code></td><td><code>GPUBuffer</code>, with its uses declared when it is created</td></tr>
+    <tr><td><code>MTLComputePipelineState</code></td><td><code>GPUComputePipeline</code></td></tr>
+    <tr><td><code>encoder.setBuffer(_, index:)</code></td><td>A <code>GPUBindGroup</code>: all the bindings for a shader, made once</td></tr>
+    <tr><td><code>commandBuffer.commit()</code></td><td><code>device.queue.submit([encoder.finish()])</code></td></tr>
+    <tr><td><code>waitUntilCompleted()</code></td><td>Nothing. See below.</td></tr>
+    <tr><td><code>buffer.contents()</code></td><td><code>await buffer.mapAsync()</code>, and only for buffers made for it</td></tr>
+  </table>
+  <p>Two differences matter more than the rest.</p>
+  <p><strong>Nothing blocks.</strong> The page's JavaScript runs in a sandboxed process; the real GPU driver lives in another. Every call you make is recorded and sent across. So there is no way to wait for the GPU, and no pointer into GPU memory. The app's engine called <code>waitUntilCompleted()</code> after each substep and then read <code>bufferA.contents()</code> directly. Neither exists here.</p>
+  <p><strong>Shared memory is gone.</strong> On an iPhone a <code>storageModeShared</code> buffer is the same memory for CPU and GPU. On the web, getting data back to JavaScript always means a copy and a wait, even on that same iPhone. Section 8 is about what that costs.</p>
+  <p>three.js sits on top of either API. It gives you a scene graph, cameras, lights and materials, and turns them into draw calls. It doesn't hide the device, which is what makes the rest of this project possible:</p>
+  <pre><code>const adapter = await navigator.gpu.requestAdapter();
+const device = await adapter.requestDevice();
+
+// three.js draws with our device...
+const renderer = new THREE.WebGPURenderer({ canvas, device });
+// ...and so does the physics engine. One device, shared buffers.
+const engine = await GpuPhysics.create(device);</code></pre>
+
+  <h2 id="pure">3. Port the pure layer first</h2>
+  <p>Everything that isn't pixels or GPU calls went into <code>js/models</code> and <code>js/physics/cpuSimulation.js</code>, with no DOM and no three.js, so Node's built-in test runner can run it:</p>
+  <ul>
+    <li><code>hourglassProfile.js</code>: the glass. Eleven control points, smoothed with Catmull-Rom splines into 67 profile points. Spin that curve around the Y axis and you have the mesh (a "surface of revolution"). The same curve gives the wall collision.</li>
+    <li><code>packing.js</code>: the grain radius for a given count, and the hex-packed starting pile.</li>
+    <li><code>cpuSimulation.js</code>: the app's CPU physics, line for line.</li>
+  </ul>
+  <p>One decision here pays off three times later. A particle is stored as eight floats in a single <code>Float32Array</code>:</p>
+  <pre><code>[ x, y, z, radius,   vx, vy, vz, sleep ]     // 32 bytes</code></pre>
+  <p>That is also the layout of the app's <code>GPUParticle</code> struct, and it is a legal vertex buffer layout. So the CPU simulation, the compute shader and the vertex shader can all use the same bytes.</p>
+
+  <h2 id="scene">4. Drawing the hourglass with three.js</h2>
+  <p>The scene is small: a group holding the glass, two wooden caps and the sand; a camera; six lights. The group rotates for the flip. The camera and lights sit outside it, so they don't.</p>
+  <h3>Glass from a curve</h3>
+  <p>three.js meshes are typed arrays with names. The model produces positions, normals and indices; the scene wraps them:</p>
+  <pre><code>const surface = createRevolutionSurface(profile.outer.slice(1, -1), 96);
+const geometry = new THREE.BufferGeometry();
+geometry.setAttribute('position', new THREE.BufferAttribute(surface.positions, 3));
+geometry.setAttribute('normal',   new THREE.BufferAttribute(surface.normals, 3));
+geometry.setIndex(new THREE.BufferAttribute(surface.indices, 1));</code></pre>
+  <h3>A shader without writing a shader: TSL</h3>
+  <p>Glass is nearly invisible when you look straight through it and brighter where it curves away from you. That is the Fresnel effect, and it needs a per-pixel calculation. three.js's node materials let you write it as an expression in JavaScript:</p>
+  <pre><code>const facing  = normalView.dot(positionViewDirection).abs();  // 1 face-on, 0 edge-on
+const fresnel = float(1).sub(facing).pow(3);
+material.opacityNode = mix(float(0.06), float(0.26), fresnel);</code></pre>
+  <p>This is TSL, the three.js Shading Language. Those calls build a small graph, and three.js compiles the graph to WGSL for WebGPU or GLSL for WebGL. You get a custom shader that works on both.</p>
+  <p>Two settings carried over from the app: the glass doesn't write depth (or it would hide the sand behind it), and it is unlit. The app's notes say lit, reflective glass always came out too bright, and the first web attempt with a Phong material confirmed it: milky blotches. A faint even veil with brighter edges reads better.</p>
+
+  <h2 id="instancing">5. Drawing 200,000 spheres: instancing</h2>
+  <p>The app drew its sand two ways. GPU mode made one SceneKit node per particle and updated each node's position every frame. Metal mode ran a second compute kernel, <code>expandMeshes</code>, that wrote 42 vertices per particle into a 50 MB buffer, because SceneKit offered no way to do custom instanced drawing.</p>
+  <p>WebGPU and three.js have the feature that kernel was working around. <strong>Instancing</strong> tells the GPU: draw this mesh N times, and for each copy give the vertex shader the next row of this other buffer.</p>
+  <pre><code>// The per-instance buffer IS the particle array.
+const instances = new THREE.InstancedInterleavedBuffer(data, 8);   // 8 floats each
+geometry.setAttribute('instancePosRadius', new THREE.InterleavedBufferAttribute(instances, 4, 0));
+geometry.setAttribute('instanceVelSleep',  new THREE.InterleavedBufferAttribute(instances, 4, 4));
+geometry.instanceCount = count;
+
+// In the material: scale a unit sphere and move it into place.
+const p = attribute('instancePosRadius', 'vec4');
+material.positionNode = positionLocal.mul(p.w).add(p.xyz);</code></pre>
+  <p>That one line of TSL is the whole of mesh expansion. The sphere mesh is stored once (80 triangles), and the vertex shader places it for each particle. There is no expanded vertex buffer and no second kernel.</p>
+  <p>Three smaller points:</p>
+  <ul>
+    <li><strong>Normals for free.</strong> On a unit sphere, the normal at a point is the point. The geometry reuses its position attribute as its normal attribute.</li>
+    <li><strong>Level of detail.</strong> 320 triangles per sphere up to 2,000 grains, 80 up to 60,000, and 20 above that. At 200,000 grains each one is a few pixels wide.</li>
+    <li><strong>Turn off culling.</strong> three.js culls a mesh whose bounding sphere is off screen. Every instance has been moved in the shader, so the bounding sphere means nothing: <code>frustumCulled = false</code>.</li>
+  </ul>
+  <p>Because the velocity and sleep counter ride along in the same buffer, the material can use them. The <strong>Sleep view</strong> toggle tints sleeping grains blue with one more <code>mix()</code>. Turn it on in GPU or Direct mode and watch the pile fall asleep from the bottom up.</p>
+
+  <h2 id="compute">6. Physics on the GPU: a compute shader</h2>
+  <p>A compute shader is a function the GPU runs many times at once. Each run gets a different id. Here, run number <em>i</em> updates particle <em>i</em>. The language is WGSL, and the translation from Metal is mostly mechanical:</p>
+  <pre><code>// Metal
+kernel void physicsStep(
+    device const GPUParticle* readParticles  [[buffer(0)]],
+    device GPUParticle*       writeParticles [[buffer(1)]],
+    device const PhysicsUniforms&amp; uniforms   [[buffer(3)]],
+    uint tid [[thread_position_in_grid]]) { ... }
+
+// WGSL
+@group(0) @binding(0) var&lt;uniform&gt; u: Uniforms;
+@group(0) @binding(1) var&lt;storage, read&gt; particlesIn: array&lt;Particle&gt;;
+@group(0) @binding(2) var&lt;storage, read_write&gt; particlesOut: array&lt;Particle&gt;;
+
+@compute @workgroup_size(64)
+fn physicsStep(@builtin(global_invocation_id) gid: vec3u) {
+  let tid = gid.x;
+  if (tid &gt;= u.particleCount) { return; }
+  ...
+}</code></pre>
+  <p>Running it takes five steps, all in <code>js/physics/gpuPhysics.js</code>, which uses no three.js so you can see each one.</p>
+  <ol>
+    <li><strong>Compile.</strong> <code>device.createShaderModule({ code })</code> takes the WGSL as a string. That is why the shaders live in a JavaScript file.</li>
+    <li><strong>Make a pipeline.</strong> <code>device.createComputePipelineAsync</code> picks an entry point in the module.</li>
+    <li><strong>Allocate buffers.</strong> Each buffer declares up front what it may be used for. The particle buffers are <code>STORAGE | COPY_SRC | COPY_DST</code>: shaders read and write them, they can be copied from, and JavaScript can upload into them.</li>
+    <li><strong>Bind.</strong> A bind group connects real buffers to the shader's <code>@binding</code> numbers.</li>
+    <li><strong>Encode and submit.</strong> Record "run this pipeline over this many workgroups", and hand the recording to the queue.</li>
+  </ol>
+  <h3>Double buffering</h3>
+  <p>All threads run at once, so they can't read particles that other threads are writing. There are two particle buffers. Each substep reads A and writes B, then they swap. A thread writes only its own particle, so no two threads touch the same memory and there is nothing to lock. This is exactly what the app does; in WebGPU it becomes two bind groups, A→B and B→A.</p>
+  <h3>One submit per frame</h3>
+  <p>The app committed a command buffer and blocked after every substep. Here all the substeps of a frame are recorded into one command buffer and submitted once:</p>
+  <pre><code>const encoder = device.createCommandEncoder();
+for (let s = 0; s &lt; substeps; s++) {
+  const pass = encoder.beginComputePass();
+  pass.setPipeline(pipeline);
+  pass.setBindGroup(0, bindGroups[this.current]);     // A-&gt;B or B-&gt;A
+  pass.dispatchWorkgroups(Math.ceil(count / 64));
+  pass.end();
+  this.current = 1 - this.current;
+}
+device.queue.submit([encoder.finish()]);</code></pre>
+  <p>JavaScript then carries on. The GPU works through the queue in order, so when three.js submits its draw a moment later, the draw is guaranteed to see the finished physics.</p>
+  <h3>The glass as a lookup table</h3>
+  <p>The CPU version finds the glass radius at a height by searching the 67-point profile. Doing that once per particle per substep on the GPU would be wasteful, so (as in the app) the profile is sampled into 256 floats and the kernel interpolates between two of them. The glass is symmetric around its axis, which makes wall collision a 2D test: compare the particle's distance from the axis with the table value at its height.</p>
+
+  <h2 id="parallel">7. Why parallel physics is harder</h2>
+  <p>The CPU loop resolves one collision at a time. When it fixes the overlap between grains 0 and 1, grain 1 has already moved by the time it is tested against grain 2. A push at the bottom of a pile travels all the way up in one pass. This ordering is called Gauss-Seidel, and it converges quickly.</p>
+  <p>On the GPU every thread reads the same snapshot. Nobody sees anybody else's correction until the next substep. That is Jacobi iteration, and it has two failure modes in a pile of sand:</p>
+  <ul>
+    <li><strong>Shimmer.</strong> Two overlapping grains each move the full correction, overshoot, and swap back next step. A resting pile never quite rests.</li>
+    <li><strong>Jamming.</strong> Impulses computed from the stale snapshot cancel gravity, and a packed pile above the neck hangs there.</li>
+  </ul>
+  <p>The app's author found the answers over many iterations, and the WGSL keeps them unchanged:</p>
+  <ul>
+    <li><strong>Quarter corrections.</strong> Each grain moves 0.25 of the overlap, not half, to damp the overshoot.</li>
+    <li><strong>Two regimes.</strong> Above the neck: push apart only, no velocity exchange, gentle damping, never sleep. Gravity wins and the pile drains. Below the neck: full collision response, heavy damping at low speed, and sleep.</li>
+    <li><strong>Sleep.</strong> A grain that stays slow while touching something counts up. Past 15 it freezes and only checks whether an awake grain is hitting it. Past 30 it checks one step in 30 whether it still has something underneath. A settled pile costs almost nothing, and it stops shimmering.</li>
+  </ul>
+  <p>The lesson generalises: moving an algorithm to the GPU can change its numerical behaviour, not just its speed.</p>
+
+  <h2 id="readback">8. Readback, and avoiding it</h2>
+  <p>The three modes exist to show one cost. They all draw the same instanced mesh. They differ in how the instance buffer is filled.</p>
+  <table>
+    <tr><th>Mode</th><th>Path of a particle each frame</th></tr>
+    <tr><td>CPU</td><td>JavaScript computes it → uploaded to the GPU → drawn</td></tr>
+    <tr><td>GPU</td><td>GPU computes it → copied back to JavaScript → uploaded to the GPU again → drawn</td></tr>
+    <tr><td>Direct</td><td>GPU computes it → copied on the GPU into the vertex buffer → drawn</td></tr>
+  </table>
+  <h3>GPU mode: the round trip</h3>
+  <p>JavaScript can only read a buffer created with <code>MAP_READ</code>, and such a buffer can't be used by shaders. So reading always goes through a staging buffer:</p>
+  <pre><code>encoder.copyBufferToBuffer(particles, 0, staging, 0, bytes);   // GPU-side copy
+device.queue.submit([encoder.finish()]);
+await staging.mapAsync(GPUMapMode.READ);                        // resolves a frame or so later
+target.set(new Float32Array(staging.getMappedRange()));         // copy into JavaScript
+staging.unmap();</code></pre>
+  <p>The promise resolves when the GPU has caught up, which is at least a frame later. So in GPU mode the picture always lags the physics slightly. If the previous read hasn't come back, the engine skips this one; it never builds a backlog.</p>
+  <h3>Direct mode: one copy that stays on the GPU</h3>
+  <p>three.js creates a GPU buffer for the instance data the first time it draws the mesh. Its backend will tell you which one:</p>
+  <pre><code>const vertexBuffer = renderer.backend.get(instances).buffer;</code></pre>
+  <p>The particle layout is the vertex layout, so the engine appends one line to the frame's command buffer:</p>
+  <pre><code>encoder.copyBufferToBuffer(engine.currentBuffer, 0, vertexBuffer, 0, count * 32);</code></pre>
+  <p>That is the whole of Direct mode. A memcpy inside the GPU, and JavaScript's per-frame work no longer depends on the particle count at all.</p>
+  <div class="reference">
+    <span class="who">A bug worth knowing</span>
+    The first version marked the instance buffer as <code>DynamicDrawUsage</code>, which sounds right for data that changes every frame. Direct mode then drew the starting pile forever, perfectly still, while a readback showed the physics running correctly underneath. three.js re-uploads a dynamic attribute from its JavaScript array on every draw, and that upload landed after the GPU copy and overwrote it. With the default usage, three.js uploads only when asked.
+  </div>
+
+  <h2 id="grid">9. Getting rid of N²: a spatial hash</h2>
+  <p>The app's kernel has every particle loop over every other particle. At 50,000 grains that is 2.5 billion distance tests per substep. The GPU makes it possible, but the cost still grows with the square of the count.</p>
+  <p>A sphere can only touch things within one diameter of itself. So divide space into cubes a little wider than a diameter, record which particles are in which cube, and each particle only needs to look in its own cube and the 26 around it. The work per particle becomes constant.</p>
+  <h3>Why a hash, not a 3D array</h3>
+  <p>A plain 3D array of cubes over the whole hourglass would be mostly empty air. It needs over a million cells for 200,000 grains, and about ten million at the smallest grain size, which no longer fits in one buffer under WebGPU's default limits. So the cube's integer coordinates are hashed into a table sized from the particle count instead:</p>
+  <pre><code>fn hashCell(c: vec3i) -&gt; u32 {
+  let h = (u32(c.x) * 73856093u) ^ (u32(c.y) * 19349663u) ^ (u32(c.z) * 83492791u);
+  return h &amp; u.tableMask;       // table size is a power of two
+}</code></pre>
+  <p>The table has about two to four buckets per particle and eight slots per bucket. For 200,000 grains that is about 19 MB.</p>
+  <h3>Building it in parallel: atomics</h3>
+  <p>One thread per particle adds itself to its bucket. Many threads may pick the same bucket at the same moment, so the bucket's counter has to be atomic:</p>
+  <pre><code>@group(0) @binding(2) var&lt;storage, read_write&gt; bucketCounts: array&lt;atomic&lt;u32&gt;&gt;;
+
+let bucket = hashCell(cellOf(particlesIn[tid].posRadius.xyz));
+let slot = atomicAdd(&amp;bucketCounts[bucket], 1u);   // returns the value before the add
+if (slot &lt; BUCKET_CAPACITY) {
+  bucketSlots[bucket * BUCKET_CAPACITY + slot] = tid;
+}</code></pre>
+  <p><code>atomicAdd</code> returns the old value, so every thread gets a slot number no other thread got. It is the same idea as <code>std::atomic::fetch_add</code> handing out array indices.</p>
+  <h3>Looking things up</h3>
+  <p>Two different cubes can hash to the same bucket. The lookup deals with that by checking, for each candidate, which cube it is really in:</p>
+  <pre><code>if (any(cellOf(other.posRadius.xyz) != cell)) { continue; }</code></pre>
+  <p>That check also stops a grain being counted twice when two of the 27 cubes share a bucket.</p>
+  <h3>One kernel, two searches</h3>
+  <p>The kernel's three neighbour loops (collision, light-sleep wake, deep-sleep support) are generated from one JavaScript template, <code>forEachNeighbour(broadphase, centre, body)</code>. It emits either the all-pairs loop or the 27-cube loop around the same body. Everything else in the kernel is shared, and both variants use the same substep table. So the <strong>Grid / N²</strong> switch changes how neighbours are found and nothing else, and you can flip it mid-run with the Stats readout open.</p>
+
+  <h2 id="testing">10. Testing a GPU program</h2>
+  <p>There are three layers.</p>
+  <ul>
+    <li><strong>Node, 69 tests.</strong> The glass, the packing, the CPU physics (including the app's ten CPU tests), the timer, settings and URL parsing. Also <code>models/grid.js</code>, a plain JavaScript version of the spatial hash. One test builds a jittered pile of 3,000 grains and checks that the hash finds every true contact with no duplicates.</li>
+    <li><strong>The browser, 15 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search.</li>
+    <li><strong>Cross-checking.</strong> The most useful single test: start both searches from the same moving state, step each, read both back, and compare. The largest difference was a few millionths of a unit (1 to 3 × 10⁻⁶ across runs), which is floating-point summation order. If the hash were dropping neighbours this test would show it.</li>
+  </ul>
+  <p>The page was also driven headless, in Chromium on a software GPU, to take the screenshots here. That found two environment problems (recorded in <code>CLAUDE.md</code>) and one real bug (the one in section 8).</p>
+
+  <h2 id="found">11. Things found along the way</h2>
+  <h3>The neck pinches shut</h3>
+  <p>A test asserting "the neck is the narrowest point" failed. Catmull-Rom splines overshoot where a curve turns sharply, so the glass is narrowest just beside the neck, not at it, and at high counts the inner radius there reaches zero. On top of that, the neck is sized as the grain radius plus 0.002, while the wall test subtracts a clearance of 0.003. The usable radius at the neck is therefore negative for every count.</p>
+  <p>Both engines have a branch for "narrower than the particle": move the grain onto the axis. So grains don't queue at the neck. They are placed on the axis, overlapping, and fall through together. In CPU mode the sphere collision that runs afterwards can push a few of them sideways out through the glass for a frame.</p>
+  <h3>So the sand is not a timer</h3>
+  <p>The consequence was measured in this port. At the 5 second setting, the upper chamber empties in about 1.5 seconds in every mode. At 30 seconds it takes 5 seconds on the CPU with 250 grains, and more than 30 seconds on the GPU with 5,000. Gravity scaling and neck friction slow the grains down, but nothing meters them.</p>
+  <p>This is the app's design carried over faithfully, and it hasn't been changed here. A real fix would size the neck from the grain size and the duration (flow through an opening follows the Beverloo law, roughly proportional to the opening's width to the power 2.5) and make the wall hold. That needs retuning the parallel collision response, which is a project of its own.</p>
+  <h3>A stagger that stopped staggering</h3>
+  <p>In the app, a deep-sleeping grain checks for support when <code>counter % 30 == tid % 30</code>. But the counter stops at 60, and 60 % 30 is 0, so once it saturates only grains whose index is a multiple of 30 ever check again. The app's own test passed because it used grain 0. Here the counter cycles from 31 to 60, so every sleeper gets its turn once in 30 steps. The browser test uses grain 7 for that reason.</p>
+
+  <h2 id="next">12. What wasn't measured, and what to try next</h2>
+  <div class="reference">
+    <span class="who">Not measured</span>
+    Everything here was run on a software GPU at one or two frames a second. That proves the shaders are correct. It says nothing about speed. No frame rate in these docs comes from real hardware, and the count limits (2,000 / 20,000 / 200,000, and 50,000 for N²) are estimates, not benchmarks.
+  </div>
+  <p>Good experiments on your own machine, with <code>?stats</code> on:</p>
+  <ul>
+    <li><code>?mode=direct&amp;count=50000</code>, then switch Grid and N² while it runs. N² does 2.5 billion pair tests a frame; the grid does 1.35 million bucket lookups.</li>
+    <li>The same count in GPU and Direct mode, to see what the readback costs.</li>
+    <li>Raise the count until the frame time climbs, in each mode.</li>
+  </ul>
+  <p>Where to take it from here:</p>
+  <ul>
+    <li><strong>Time the GPU properly.</strong> WebGPU has a <code>timestamp-query</code> feature that measures a compute pass in nanoseconds. Frame time only tells you something is slow.</li>
+    <li><strong>A sorted grid.</strong> Count per cell, prefix-sum, scatter. Neighbours end up adjacent in memory, which is kinder to the cache than hashed buckets.</li>
+    <li><strong>A fixed timestep.</strong> Physics that runs at 120 Hz whatever the display does, so behaviour doesn't depend on the screen.</li>
+    <li><strong>A neck that meters the sand</strong>, as described above.</li>
+  </ul>
+
+  <footer>
+    <a href="./">Open the hourglass</a> · <a href="architecture.html">Architecture</a> · <a href="gpu-tests.html">GPU tests</a> · <a href="https://github.com/pcwilliams/shiftingsands-web">Source</a>
+  </footer>
+</div>
+</body>
+</html>
