@@ -248,6 +248,21 @@ export class GpuPhysics {
 
     if (copyTarget) this.#encodeCopy(encoder, copyTarget);
     device.queue.submit([encoder.finish()]);
+    this.#sampleGpuTime();
+  }
+
+  // A rough clock for the stats readout. Every 30th frame, time how long the
+  // GPU takes to finish everything queued up to and including this physics
+  // step. When the GPU is keeping up that is close to the cost of the step;
+  // when it isn't, it is the backlog, which is the thing worth seeing.
+  #sampleGpuTime() {
+    if (this.frame % 30 !== 0 || this.timing) return;
+    this.timing = true;
+    const started = performance.now();
+    this.device.queue.onSubmittedWorkDone().then(() => {
+      this.gpuMs = performance.now() - started;
+      this.timing = false;
+    }, () => { this.timing = false; });
   }
 
   #encodeCopy(encoder, target) {

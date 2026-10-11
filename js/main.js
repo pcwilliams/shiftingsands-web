@@ -189,7 +189,10 @@ async function main() {
       `${substeps} substep${substeps > 1 ? 's' : ''}  ${work.value.toExponential(1)} ${work.unit}/frame`,
       `${(scene.triangles / 1e6).toFixed(2)}M triangles`,
     ];
-    if (mode !== 'cpu') lines.push(`${(scene.engine.memoryBytes / 1048576).toFixed(1)} MB of GPU buffers`);
+    if (mode !== 'cpu') {
+      lines.push(`${(scene.engine.memoryBytes / 1048576).toFixed(1)} MB of GPU buffers`);
+      if (scene.engine.gpuMs != null) lines.push(`physics on GPU about ${scene.engine.gpuMs.toFixed(1)} ms`);
+    }
     // Plumbing, for diagnosing a blank picture.
     const backend = scene.renderer.backend?.isWebGPUBackend ? 'WebGPU' : 'WebGL 2';
     let feed = 'array upload';

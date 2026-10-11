@@ -331,6 +331,20 @@ line.**
 **One-time repo setup:** Settings → Pages → Build and deployment → Source
 → **GitHub Actions**.
 
+## Open issue: iPhone 16 Pro struggles above about 10,000 grains (Direct, grid)
+
+Reported after the linked-list grid went in; not yet located. Measured
+candidate visits per grain per substep (software GPU, via the CPU
+reference): about 40 at rest and mid-fall; peaks of about 100 at 10,000
+and about 700 at 30,000 while the neck is crowded (one bucket held 1,361
+grains). That is 1 to 2.4% of brute force, so the search does not
+obviously explain it; rendering (80 triangles per grain) and the drop to
+1 substep above 10,000 are the other suspects. Raising the table load
+from 2 to 8 buckets per grain was tried and cut visits only from 40 to
+35, so it was reverted. Stats now shows "physics on GPU about N ms"
+(time for the queue to drain after the physics submit, sampled every 30
+frames) to separate physics from drawing on the device.
+
 ## Open issue: blank start in the GPU modes on macOS Safari
 
 Reported repeatedly: on macOS Safari nothing is drawn at start-up in GPU
