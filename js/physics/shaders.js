@@ -45,13 +45,27 @@ struct Uniforms {
   cellSize: f32,
   particleCount: u32,
   tableMask: u32,
-  gridOrigin: vec4f,
+  gridOrigin: vec4f,   // xyz = grid corner, w = frame number (for sweepOrder)
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
 fn cellOf(p: vec3f) -> vec3i {
   return max(vec3i(floor((p - u.gridOrigin.xyz) / u.cellSize)), vec3i(0));
+}
+
+// xyz: +1 or -1 per axis. w: which of three axis rotations to use.
+fn sweepOrder(tid: u32) -> vec4i {
+  var h = (tid * 2654435761u) ^ (u32(u.gridOrigin.w) * 2246822519u);
+  h ^= h >> 15u;
+  h *= 739982445u;
+  h ^= h >> 12u;
+  return vec4i(
+    1 - 2 * i32(h & 1u),
+    1 - 2 * i32((h >> 1u) & 1u),
+    1 - 2 * i32((h >> 2u) & 1u),
+    i32((h >> 3u) % 3u),
+  );
 }
 
 fn hashCell(c: vec3i) -> u32 {
@@ -108,20 +122,24 @@ function forEachNeighbour(broadphase, centre, body) {
       let home = cellOf(${centre});
       // Two of the 27 cubes can hash to the same bucket. Remember the buckets
       // already walked so no particle is visited twice.
-      // Odd grains sweep the 27 cubes in the opposite order to even grains.
-      // The collision loop moves a grain as it goes, so the order in which
-      // neighbours are met nudges the result. All-pairs meets them in index
-      // order, which is spatially arbitrary. A grid sweep is not: if every
-      // grain met its -x neighbours first, every grain got the same nudge,
-      // and the whole pile crept sideways and came to rest leaning on the
-      // glass. Alternating the direction makes the nudges cancel.
-      let sweep = 1 - 2 * i32(tid & 1u);
+      // Each grain sweeps the 27 cubes in its own scrambled order, different
+      // every frame. The collision loop moves a grain as it goes, so the
+      // order in which neighbours are met nudges the result. All-pairs meets
+      // them in index order, which is spatially arbitrary. A grid sweep is
+      // not: when every grain met its -x neighbours first, every grain got
+      // the same nudge and the pile crept sideways. So the sweep direction
+      // on each axis, and which axis is outermost, come from a hash of the
+      // grain's index and the frame number, and the nudges cancel.
+      let order = sweepOrder(tid);
       var seen: array<u32, 27>;
       var seenCount = 0u;
       for (var dz = -1; dz <= 1 && !stop; dz++) {
         for (var dy = -1; dy <= 1 && !stop; dy++) {
           for (var dx = -1; dx <= 1 && !stop; dx++) {
-            let cell = home + vec3i(dx, dy, dz) * sweep;
+            var step = vec3i(dx, dy, dz) * order.xyz;
+            if (order.w == 1) { step = step.yzx; }
+            if (order.w == 2) { step = step.zxy; }
+            let cell = home + step;
             if (any(cell < vec3i(0))) { continue; }
             let bucket = hashCell(cell);
             var repeat = false;

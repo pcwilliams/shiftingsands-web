@@ -156,7 +156,8 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
 - **One submit per frame:** all substeps (and the grid rebuild before
   each) are encoded into one command buffer. Uniforms are written once
   per frame, since `subDt` is the same for every substep.
-- **Uniform struct:** 12 scalars then `gridOrigin: vec4f` = 64 bytes.
+- **Uniform struct:** 12 scalars then `gridOrigin: vec4f` = 64 bytes
+  (`gridOrigin.w` carries the frame number, 0..65535, as a float).
   `#writeUniforms` must match `struct Uniforms` field for field.
   `particleCount` and `tableMask` are `u32` at float indices 10 and 11.
 - **Workgroup size** 64; dispatch `ceil(count / 64)`.
@@ -181,12 +182,16 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
   mid-pour, one cell at the neck held 938 of 10,000 grains. Grains past
   the eighth were dropped, so the grid behaved differently from brute
   force (sand stuck in a pile to one side).
-- **Odd grains sweep the 27 cells in reverse** (`sweep = 1 - 2 * (tid &
-  1)`). The collision loop updates `pos` as it goes, so visiting order
-  biases the result. With one fixed sweep direction every grain got the
-  same bias and the settled pile sat 14 radii off-centre at 10,000 grains
-  (brute force: 0.07). Alternating brings it under 1 radius. Do not
-  remove this, and do not "simplify" the loop order.
+- **The sweep over the 27 cells is scrambled per grain, per frame**
+  (`sweepOrder(tid)`: a sign per axis and one of three axis rotations,
+  from a hash of `tid` and the frame number in `gridOrigin.w`). The
+  collision loop updates `pos` as it goes, so visiting order biases the
+  result. Measured on settled piles (surface height spread round the
+  pile, in radii / fullest-to-emptiest sector ratio):
+  fixed sweep: pile 14 radii off-centre at 10,000;
+  odd/even alternation: centred, but 6.9 / 2.62 (a heap on one side);
+  scrambled: 0.4 / 1.06; brute force: 0.5 / 1.04.
+  Do not remove this, and do not "simplify" the loop order.
 - The physics module declares the heads as `array<u32>` (read-only); the
   build module declares the same buffer as `array<atomic<u32>>`
   (read-write). WGSL only allows atomics in read-write storage.
@@ -271,7 +276,7 @@ ports of the app's CPU tests), `grid` (8), `config` (10), `timer` (8),
 `settings` (13).
 
 Browser (18, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
-settle-and-sleep, wake-on-support-loss, pile-rests-in-the-middle and a
+settle-and-sleep, wake-on-support-loss, pile-rests-level-and-centred and a
 5,000-grain containment run,
 each for `brute` and `grid`, plus "brute force and grid agree" and "a
 crowded bucket keeps everyone". The agreement test uses a loose pile and
@@ -326,15 +331,21 @@ line.**
 **One-time repo setup:** Settings → Pages → Build and deployment → Source
 → **GitHub Actions**.
 
-## Open issue: blank start in Direct mode on real browsers
+## Open issue: blank start in the GPU modes on macOS Safari
 
-Reported on the first deploy: nothing drawn at start-up in Direct mode
-until the first run (one browser) or until switching mode and back
-(macOS Safari). Not reproducible in headless Chromium, cause unknown.
-Since then: resize is checked every frame, three.js internals are not
-touched before the first draw, and `uncapturederror` is shown in the
-on-screen notice. If it recurs, the notice text is the first thing to ask
-for.
+Reported repeatedly: on macOS Safari nothing is drawn at start-up in GPU
+or Direct mode until the user switches to CPU mode and back. Not
+reproducible in headless Chromium; cause unknown. What CPU mode has that
+the others lack: no compute submissions, and a `writeBuffer` upload of
+the instance buffer every frame.
+
+Mitigations so far, none confirmed: resize checked every frame; three.js
+internals untouched before the first draw; `uncapturederror` shown in the
+notice; `WARMUP_FRAMES` (4 draws after each rebuild before any compute is
+queued). Stats now ends with a plumbing line (backend, frames drawn,
+whether the GPU copy is bound or how many readbacks completed) and any
+WebGPU error. If it recurs, ask for: that Stats line, whether the glass is
+visible, and the Web Inspector console.
 
 ## Gotchas
 

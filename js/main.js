@@ -47,6 +47,7 @@ async function main() {
   const timer = new TimerModel(store.duration);
   let built = null;           // the settings the current sand was built with
   let lastResults = null;
+  let lastGpuError = '';
 
   const wanted = () => ({
     mode: store.mode, count: store.count, size: store.size, randomColors: store.randomColors,
@@ -142,6 +143,7 @@ async function main() {
     let reported = false;
     device.addEventListener('uncapturederror', (event) => {
       console.error('WebGPU error:', event.error.message);
+      lastGpuError = event.error.message;
       if (reported) return;
       reported = true;
       controls.notify(`WebGPU error: ${event.error.message.slice(0, 220)}`);
@@ -188,6 +190,13 @@ async function main() {
       `${(scene.triangles / 1e6).toFixed(2)}M triangles`,
     ];
     if (mode !== 'cpu') lines.push(`${(scene.engine.memoryBytes / 1048576).toFixed(1)} MB of GPU buffers`);
+    // Plumbing, for diagnosing a blank picture.
+    const backend = scene.renderer.backend?.isWebGPUBackend ? 'WebGPU' : 'WebGL 2';
+    let feed = 'array upload';
+    if (mode === 'direct') feed = scene.gpuVertexBuffer ? 'GPU copy bound' : 'GPU copy waiting';
+    if (mode === 'gpu') feed = `${scene.engine.readsCompleted ?? 0} readbacks`;
+    lines.push(`${backend}  frame ${scene.framesRendered ?? 0}  ${feed}`);
+    if (lastGpuError) lines.push(`error: ${lastGpuError.slice(0, 60)}`);
     if (lastResults) {
       lines.push(`drained ${lastResults.drainedPercent.toFixed(0)}%  asleep ${lastResults.sleeping}`);
     }

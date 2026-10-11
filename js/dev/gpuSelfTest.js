@@ -106,26 +106,43 @@ const TESTS = {
     expect(p[7 * STRIDE + 1] < before - r, `A should fall (before=${before}, after=${p[7 * STRIDE + 1]})`);
   },
 
-  async 'the pile comes to rest in the middle'(engine, bp) {
-    // The glass is symmetric, so the settled pile must be too. A grid that
-    // always swept its neighbours in the same direction left it 14 radii
-    // off-centre at 10,000 grains.
+  async 'the pile comes to rest level and centred'(engine, bp) {
+    // The glass is symmetric, so the settled pile must be too. Two earlier
+    // grids failed this: one swept neighbours in a fixed direction and left
+    // the pile 14 radii off-centre; the next alternated direction by odd and
+    // even grain, which centred it but left a heap on one side.
     const count = 2000;
     const radius = radiusForCount(count);
     configure(engine, bp, count, radius);
     engine.neckDamping = 0.1;
     engine.snapAfterFlip();
-    for (let i = 0; i < 420; i++) {
+    for (let i = 0; i < 600; i++) {
       engine.step(1 / 120);
       if (i % 16 === 0) await engine.device.queue.onSubmittedWorkDone();
     }
     const p = await read(engine);
-    let x = 0, z = 0;
-    for (let i = 0; i < count; i++) { x += p[i * STRIDE]; z += p[i * STRIDE + 2]; }
-    const offX = x / count / radius, offZ = z / count / radius;
     expect(summarise(p, count).upper === 0, 'the sand should have drained');
+
+    let x = 0, z = 0;
+    const sectors = Array.from({ length: 8 }, () => []);
+    for (let i = 0; i < count; i++) {
+      const px = p[i * STRIDE], pz = p[i * STRIDE + 2];
+      x += px; z += pz;
+      if (Math.hypot(px, pz) > 0.05) {
+        sectors[Math.min(7, Math.floor((Math.atan2(pz, px) + Math.PI) / (Math.PI / 4)))].push(p[i * STRIDE + 1]);
+      }
+    }
+    const offX = x / count / radius, offZ = z / count / radius;
     expect(Math.abs(offX) < 1.5 && Math.abs(offZ) < 1.5, `pile centre is off by ${offX.toFixed(2)}, ${offZ.toFixed(2)} radii`);
-    return `centre off by ${offX.toFixed(2)}, ${offZ.toFixed(2)} radii`;
+
+    // Height of the surface in each of eight slices round the axis.
+    const tops = sectors.map((ys) => { ys.sort((a, b) => a - b); return ys[Math.floor(ys.length * 0.97)]; });
+    const spread = (Math.max(...tops) - Math.min(...tops)) / radius;
+    const sizes = sectors.map((ys) => ys.length);
+    const ratio = Math.max(...sizes) / Math.min(...sizes);
+    expect(spread < 2, `surface height varies by ${spread.toFixed(1)} radii round the pile`);
+    expect(ratio < 1.4, `fullest slice holds ${ratio.toFixed(2)}x the emptiest`);
+    return `surface level to ${spread.toFixed(1)} radii, slices within ${ratio.toFixed(2)}x`;
   },
 
   async 'no particle escapes or turns to NaN at 5,000'(engine, bp) {

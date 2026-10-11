@@ -72,6 +72,7 @@ export class GpuPhysics {
     this.buffers = null;
     this.current = 0;            // which of the two particle buffers is "now"
     this.readPending = false;
+    this.frame = 0;
     this.uniformData = new ArrayBuffer(UNIFORM_BYTES);
     this.uniformF32 = new Float32Array(this.uniformData);
     this.uniformU32 = new Uint32Array(this.uniformData);
@@ -204,7 +205,7 @@ export class GpuPhysics {
     f[12] = this.grid.origin[0];
     f[13] = this.grid.origin[1];
     f[14] = this.grid.origin[2];
-    f[15] = 0;
+    f[15] = this.frame;   // integer-valued float; scrambles the grid sweep order
     this.device.queue.writeBuffer(this.buffers.uniforms, 0, this.uniformData);
   }
 
@@ -220,6 +221,7 @@ export class GpuPhysics {
     if (!this.buffers || this.count === 0) return;
     const { device, buffers, pipelines, bindGroups } = this;
     const substeps = this.substeps;
+    this.frame = (this.frame + 1) % 65536;
     this.#writeUniforms(dt / substeps);
 
     const workgroups = Math.ceil(this.count / WORKGROUP_SIZE);
@@ -297,6 +299,7 @@ export class GpuPhysics {
       if (buffers !== this.buffers) return false;   // reconfigured while waiting
       target.set(new Float32Array(buffers.staging.getMappedRange(0, bytes)));
       buffers.staging.unmap();
+      this.readsCompleted = (this.readsCompleted ?? 0) + 1;
       return true;
     } catch {
       return false;   // buffer destroyed mid-read: harmless

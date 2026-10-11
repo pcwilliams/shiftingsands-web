@@ -34,6 +34,7 @@ import { CpuSimulation } from '../physics/cpuSimulation.js';
 import { GpuPhysics } from '../physics/gpuPhysics.js';
 
 const FOV = 40;
+const WARMUP_FRAMES = 4;
 const LOOK_AT = new THREE.Vector3(0, -0.02, 0);
 const HOURGLASS_HEIGHT = 1.05;
 const HOURGLASS_WIDTH = 0.48;
@@ -215,6 +216,7 @@ export class HourglassScene {
     this.instances = instances;
     this.gpuVertexBuffer = null;
     this.sandDrawn = false;
+    this.framesSinceBuild = 0;
 
     const sphere = new THREE.IcosahedronGeometry(1, sphereDetail(count));
     const geometry = new THREE.InstancedBufferGeometry();
@@ -315,6 +317,12 @@ export class HourglassScene {
    * @param {number} dt seconds, already clamped
    */
   update(dt, { gravity, neckDamping }) {
+    // Let three.js draw new sand a few times before any compute work is
+    // queued. On macOS Safari nothing was drawn at start-up in the GPU modes
+    // until the page had spent a while in CPU mode, where no compute runs.
+    // The cause isn't known; this gives every start the same quiet first
+    // frames that made it work. The sand is at rest then, so nothing is lost.
+    if (this.framesSinceBuild < WARMUP_FRAMES) return;
     this.#advanceFlip(dt);
     const angle = this.container.rotation.x;
 
@@ -350,6 +358,8 @@ export class HourglassScene {
     this.resizeIfNeeded();
     this.renderer.render(this.scene, this.camera);
     this.sandDrawn = true;
+    this.framesRendered = (this.framesRendered ?? 0) + 1;
+    this.framesSinceBuild++;
   }
 
   /**
