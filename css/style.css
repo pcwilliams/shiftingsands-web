@@ -20,6 +20,9 @@ html, body {
   font: 500 12px/1.3 var(--ui);
   overflow: hidden;
   overscroll-behavior: none;
+  /* No double-tap zoom (easy to trigger on the buttons), but pinch still
+     works everywhere, so an accidental zoom can always be pinched back. */
+  touch-action: manipulation;
   -webkit-text-size-adjust: 100%;
 }
 
@@ -29,7 +32,6 @@ html, body {
   width: 100%;
   height: 100%;
   display: block;
-  touch-action: none;
 }
 
 /* The four corners, as in the app. */
