@@ -280,6 +280,10 @@ nextInBucket[tid] = atomicExchange(&amp;bucketHeads[bucket], tid + 1u);</code></
     <span class="who">The first version was wrong</span>
     The grid first shipped with eight fixed slots per bucket, on the reasoning that spheres this size can't put more than a few centres in one cube. With the grid on, sand piled up to one side and stuck; with N² it flowed. The reasoning assumed grains don't overlap much, and in this simulation they do: measured mid-pour, one cell at the neck held 938 grains. Every grain past the eighth was invisible to its neighbours. The test that "proved" grid and N² equal had only used a loose, freshly flipped pile. Linked lists have no capacity to exceed, and there is now a test with 31 grains in one bucket.
   </div>
+  <div class="reference">
+    <span class="who">And the second version leaned</span>
+    With that fixed, 10,000 grains drained and then came to rest as a tower leaning on one side of the glass. The collision loop moves a grain as it goes, so the order in which it meets its neighbours nudges the answer slightly. All-pairs meets them in index order, which is spatially arbitrary, so the nudges average out. The grid met them in sweep order: every grain saw its −x neighbours first, every grain got the same nudge, and the pile crept sideways, 14 grain radii off-centre. Now odd-numbered grains sweep the cubes in the opposite direction to even ones and the pile settles within one radius of the middle. A test checks the settled pile is centred, for both searches.
+  </div>
   <h3>One kernel, two searches</h3>
   <p>The kernel's three neighbour loops (collision, light-sleep wake, deep-sleep support) are generated from one JavaScript template, <code>forEachNeighbour(broadphase, centre, body)</code>. It emits either the all-pairs loop or the 27-cube loop around the same body. Everything else in the kernel is shared, and both variants use the same substep table. So the <strong>Grid / N²</strong> switch changes how neighbours are found and nothing else, and you can flip it mid-run with the Stats readout open.</p>
 
@@ -287,7 +291,7 @@ nextInBucket[tid] = atomicExchange(&amp;bucketHeads[bucket], tid + 1u);</code></
   <p>There are three layers.</p>
   <ul>
     <li><strong>Node, 70 tests.</strong> The glass, the packing, the CPU physics (including the app's ten CPU tests), the timer, settings and URL parsing. Also <code>models/grid.js</code>, a plain JavaScript version of the spatial hash. One test builds a jittered pile of 3,000 grains and checks that the hash finds every true contact with no duplicates.</li>
-    <li><strong>The browser, 16 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search.</li>
+    <li><strong>The browser, 18 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search.</li>
     <li><strong>Cross-checking.</strong> The most useful single test: start both searches from the same moving state, step each, read both back, and compare. The largest difference was a few millionths of a unit (1 to 3 × 10⁻⁶ across runs), which is floating-point summation order. That test alone was not enough, as section 9 admits: it used a loose pile. A second test packs 31 grains into one bucket and checks the two searches still agree exactly.</li>
   </ul>
   <p>The page was also driven headless, in Chromium on a software GPU, to take the screenshots here. That found two environment problems (recorded in <code>CLAUDE.md</code>) and one real bug (the one in section 8).</p>

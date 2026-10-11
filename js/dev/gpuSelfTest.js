@@ -106,6 +106,28 @@ const TESTS = {
     expect(p[7 * STRIDE + 1] < before - r, `A should fall (before=${before}, after=${p[7 * STRIDE + 1]})`);
   },
 
+  async 'the pile comes to rest in the middle'(engine, bp) {
+    // The glass is symmetric, so the settled pile must be too. A grid that
+    // always swept its neighbours in the same direction left it 14 radii
+    // off-centre at 10,000 grains.
+    const count = 2000;
+    const radius = radiusForCount(count);
+    configure(engine, bp, count, radius);
+    engine.neckDamping = 0.1;
+    engine.snapAfterFlip();
+    for (let i = 0; i < 420; i++) {
+      engine.step(1 / 120);
+      if (i % 16 === 0) await engine.device.queue.onSubmittedWorkDone();
+    }
+    const p = await read(engine);
+    let x = 0, z = 0;
+    for (let i = 0; i < count; i++) { x += p[i * STRIDE]; z += p[i * STRIDE + 2]; }
+    const offX = x / count / radius, offZ = z / count / radius;
+    expect(summarise(p, count).upper === 0, 'the sand should have drained');
+    expect(Math.abs(offX) < 1.5 && Math.abs(offZ) < 1.5, `pile centre is off by ${offX.toFixed(2)}, ${offZ.toFixed(2)} radii`);
+    return `centre off by ${offX.toFixed(2)}, ${offZ.toFixed(2)} radii`;
+  },
+
   async 'no particle escapes or turns to NaN at 5,000'(engine, bp) {
     const count = 5000;
     const radius = radiusForCount(count);

@@ -30,7 +30,7 @@ reference, except for the deliberate differences listed below.
   `new THREE.WebGPURenderer({ device })`.
 - **Persistence:** `localStorage`, keys prefixed `shiftingsands.`.
 - **Tests:** Node's built-in runner (`node --test`), 70 tests, zero
-  dependencies; plus 16 in-browser GPU tests (`gpu-tests.html`).
+  dependencies; plus 18 in-browser GPU tests (`gpu-tests.html`).
 - **Zero npm dependencies.** `package.json` exists for `"type": "module"`
   and the `npm test` alias.
 
@@ -181,6 +181,12 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
   mid-pour, one cell at the neck held 938 of 10,000 grains. Grains past
   the eighth were dropped, so the grid behaved differently from brute
   force (sand stuck in a pile to one side).
+- **Odd grains sweep the 27 cells in reverse** (`sweep = 1 - 2 * (tid &
+  1)`). The collision loop updates `pos` as it goes, so visiting order
+  biases the result. With one fixed sweep direction every grain got the
+  same bias and the settled pile sat 14 radii off-centre at 10,000 grains
+  (brute force: 0.07). Alternating brings it under 1 radius. Do not
+  remove this, and do not "simplify" the loop order.
 - The physics module declares the heads as `array<u32>` (read-only); the
   build module declares the same buffer as `array<atomic<u32>>`
   (read-write). WGSL only allows atomics in read-write storage.
@@ -264,8 +270,9 @@ Node (70): `geometry` (10), `packing` (10), `cpuPhysics` (11, including
 ports of the app's CPU tests), `grid` (8), `config` (10), `timer` (8),
 `settings` (13).
 
-Browser (16, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
-settle-and-sleep, wake-on-support-loss and a 5,000-grain containment run,
+Browser (18, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
+settle-and-sleep, wake-on-support-loss, pile-rests-in-the-middle and a
+5,000-grain containment run,
 each for `brute` and `grid`, plus "brute force and grid agree" and "a
 crowded bucket keeps everyone". The agreement test uses a loose pile and
 cannot be made crowded: with many simultaneous contacts the result

@@ -108,12 +108,20 @@ function forEachNeighbour(broadphase, centre, body) {
       let home = cellOf(${centre});
       // Two of the 27 cubes can hash to the same bucket. Remember the buckets
       // already walked so no particle is visited twice.
+      // Odd grains sweep the 27 cubes in the opposite order to even grains.
+      // The collision loop moves a grain as it goes, so the order in which
+      // neighbours are met nudges the result. All-pairs meets them in index
+      // order, which is spatially arbitrary. A grid sweep is not: if every
+      // grain met its -x neighbours first, every grain got the same nudge,
+      // and the whole pile crept sideways and came to rest leaning on the
+      // glass. Alternating the direction makes the nudges cancel.
+      let sweep = 1 - 2 * i32(tid & 1u);
       var seen: array<u32, 27>;
       var seenCount = 0u;
       for (var dz = -1; dz <= 1 && !stop; dz++) {
         for (var dy = -1; dy <= 1 && !stop; dy++) {
           for (var dx = -1; dx <= 1 && !stop; dx++) {
-            let cell = home + vec3i(dx, dy, dz);
+            let cell = home + vec3i(dx, dy, dz) * sweep;
             if (any(cell < vec3i(0))) { continue; }
             let bucket = hashCell(cell);
             var repeat = false;
