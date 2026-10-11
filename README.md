@@ -1,6 +1,6 @@
 # Shifting Sands (web)
 
-![three.js](https://img.shields.io/badge/three.js-r186%20WebGPU-black) ![WGSL](https://img.shields.io/badge/physics-WGSL%20compute-d9a441) ![No build step](https://img.shields.io/badge/build-none-555) ![Tests](https://img.shields.io/badge/tests-69%20node%20%2B%2015%20GPU-2ea043)
+![three.js](https://img.shields.io/badge/three.js-r186%20WebGPU-black) ![WGSL](https://img.shields.io/badge/physics-WGSL%20compute-d9a441) ![No build step](https://img.shields.io/badge/build-none-555) ![Tests](https://img.shields.io/badge/tests-70%20node%20%2B%2016%20GPU-2ea043)
 
 An hourglass timer for the browser with a real-time granular physics
 simulation. Golden sand grains pour through a glass hourglass built
@@ -27,6 +27,7 @@ it.
 - **Two ways to find collisions** on the GPU, switchable while it runs:
   - **N²**: every grain tests every other grain, exactly as the app does.
   - **Grid**: a spatial hash, so each grain only looks at its neighbours.
+    It gives the same physics as N², only faster.
 - **A glass that fits the sand**: the neck is rebuilt for each grain size
   so that one grain just fits through.
 - **A real flip**: gravity turns with the glass during the 1.2 second
@@ -89,21 +90,23 @@ python3 -m http.server 8000
 node --test
 ```
 
-69 tests cover everything that isn't pixels: the glass profile, spawn
+70 tests cover everything that isn't pixels: the glass profile, spawn
 packing, the CPU physics (ported from the app's `CPUPhysicsTests.swift`),
 the spatial hash, the timer, settings and URL parsing. They need Node 20
 or later and have no dependencies.
 
 Node can't run WebGPU, so the compute shaders have their own page:
-open [`gpu-tests.html`](gpu-tests.html) in a WebGPU browser. It runs
+open [the GPU test page](https://pcwilliams.github.io/shiftingsands-web/gpu-tests.html) in a WebGPU browser. It runs
 ports of the app's `GPUPhysicsTests.swift` on your GPU, once per
 collision search, and checks that the grid and N² produce the same step.
 
 ## How it works
 
-- [`tutorial.html`](tutorial.html) explains how the rendering and the
-  GPU physics work, step by step, for someone coming from Metal.
-- [`architecture.html`](architecture.html) has the diagrams.
+- [Tutorial](https://pcwilliams.github.io/shiftingsands-web/tutorial.html):
+  how the rendering and the GPU physics work, step by step, for someone
+  coming from Metal.
+- [Architecture](https://pcwilliams.github.io/shiftingsands-web/architecture.html):
+  the diagrams.
 - [`CLAUDE.md`](CLAUDE.md) is the developer reference.
 
 ## Project structure

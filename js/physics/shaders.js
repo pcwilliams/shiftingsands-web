@@ -18,7 +18,6 @@
 // particle finds its neighbours: 'brute' tests every other particle (the
 // app's O(N²) loop) and 'grid' looks in a spatial hash.
 
-import { BUCKET_CAPACITY } from '../models/grid.js';
 import { PROFILE_TABLE_SIZE } from '../models/hourglassProfile.js';
 
 export const WORKGROUP_SIZE = 64;
@@ -49,8 +48,6 @@ struct Uniforms {
   gridOrigin: vec4f,
 }
 
-const BUCKET_CAPACITY = ${BUCKET_CAPACITY}u;
-
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
 fn cellOf(p: vec3f) -> vec3i {
@@ -64,27 +61,30 @@ fn hashCell(c: vec3i) -> u32 {
 `;
 
 // ---------------------------------------------------------------------------
-// Grid build: one thread per particle drops its index into its bucket.
+// Grid build: one thread per particle adds itself to its bucket.
+//
+// Each bucket is a linked list. bucketHeads[b] holds the first particle in
+// bucket b, and nextInBucket[i] holds the particle after i. Indices are stored
+// plus one, so that 0 means "end of list" and clearing the heads to zero
+// empties every bucket.
 //
 // Thousands of threads may pick the same bucket at the same instant, so the
-// bucket's counter is atomic. atomicAdd returns the value before the add,
-// which gives each thread a slot number nobody else got.
+// head is atomic. atomicExchange swaps my index in and hands back whoever was
+// there before, who becomes my "next". No thread can lose that race: every
+// particle ends up in exactly one list, however crowded the cell.
 // ---------------------------------------------------------------------------
 export const GRID_BUILD_WGSL = /* wgsl */ `
 ${COMMON}
 @group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
-@group(0) @binding(2) var<storage, read_write> bucketCounts: array<atomic<u32>>;
-@group(0) @binding(3) var<storage, read_write> bucketSlots: array<u32>;
+@group(0) @binding(2) var<storage, read_write> bucketHeads: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> nextInBucket: array<u32>;
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn buildGrid(@builtin(global_invocation_id) gid: vec3u) {
   let tid = gid.x;
   if (tid >= u.particleCount) { return; }
   let bucket = hashCell(cellOf(particlesIn[tid].posRadius.xyz));
-  let slot = atomicAdd(&bucketCounts[bucket], 1u);
-  if (slot < BUCKET_CAPACITY) {
-    bucketSlots[bucket * BUCKET_CAPACITY + slot] = tid;
-  }
+  nextInBucket[tid] = atomicExchange(&bucketHeads[bucket], tid + 1u);
 }
 `;
 
@@ -106,20 +106,35 @@ function forEachNeighbour(broadphase, centre, body) {
   return /* wgsl */ `{
       var stop = false;
       let home = cellOf(${centre});
+      // Two of the 27 cubes can hash to the same bucket. Remember the buckets
+      // already walked so no particle is visited twice.
+      var seen: array<u32, 27>;
+      var seenCount = 0u;
       for (var dz = -1; dz <= 1 && !stop; dz++) {
         for (var dy = -1; dy <= 1 && !stop; dy++) {
           for (var dx = -1; dx <= 1 && !stop; dx++) {
             let cell = home + vec3i(dx, dy, dz);
             if (any(cell < vec3i(0))) { continue; }
             let bucket = hashCell(cell);
-            let n = min(bucketCounts[bucket], BUCKET_CAPACITY);
-            for (var s = 0u; s < n && !stop; s++) {
-              let j = bucketSlots[bucket * BUCKET_CAPACITY + s];
+            var repeat = false;
+            for (var k = 0u; k < seenCount; k++) {
+              if (seen[k] == bucket) { repeat = true; }
+            }
+            if (repeat) { continue; }
+            seen[seenCount] = bucket;
+            seenCount++;
+
+            // Walk the bucket's list. A bucket may also hold particles from
+            // some far-off cube with the same hash; the distance tests in the
+            // body reject those. The guard only matters if memory is corrupt.
+            var link = bucketHeads[bucket];
+            var guard = 0u;
+            while (link != 0u && !stop && guard < u.particleCount) {
+              let j = link - 1u;
+              link = nextInBucket[j];
+              guard++;
               if (j == tid) { continue; }
               let other = particlesIn[j];
-              // Another cube can share this bucket: skip anything that isn't
-              // really in the cube being visited.
-              if (any(cellOf(other.posRadius.xyz) != cell)) { continue; }
               ${body}
             }
           }
@@ -150,8 +165,8 @@ ${COMMON}
 @group(0) @binding(2) var<storage, read_write> particlesOut: array<Particle>;
 @group(0) @binding(3) var<storage, read> profileTable: array<f32, ${PROFILE_TABLE_SIZE}>;
 ${grid ? /* wgsl */ `
-@group(0) @binding(4) var<storage, read> bucketCounts: array<u32>;
-@group(0) @binding(5) var<storage, read> bucketSlots: array<u32>;` : ''}
+@group(0) @binding(4) var<storage, read> bucketHeads: array<u32>;
+@group(0) @binding(5) var<storage, read> nextInBucket: array<u32>;` : ''}
 
 // Inner glass radius at height y: O(1) lookup in a 256-entry table.
 fn glassRadius(y: f32) -> f32 {

@@ -29,8 +29,8 @@ reference, except for the deliberate differences listed below.
   physics share one `GPUDevice`, created in `main.js` and passed to
   `new THREE.WebGPURenderer({ device })`.
 - **Persistence:** `localStorage`, keys prefixed `shiftingsands.`.
-- **Tests:** Node's built-in runner (`node --test`), 69 tests, zero
-  dependencies; plus 15 in-browser GPU tests (`gpu-tests.html`).
+- **Tests:** Node's built-in runner (`node --test`), 70 tests, zero
+  dependencies; plus 16 in-browser GPU tests (`gpu-tests.html`).
 - **Zero npm dependencies.** `package.json` exists for `"type": "module"`
   and the `npm test` alias.
 
@@ -150,7 +150,7 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
   `physics-brute`, `physics-grid`, `grid-build`, `snap`. `layout: 'auto'`.
 - **Buffers** per configuration: particles A and B (STORAGE | COPY_SRC |
   COPY_DST), uniforms (64 bytes), profile table (256 floats), bucket
-  counts, bucket slots, readback staging (MAP_READ | COPY_DST).
+  heads, bucket next-links, readback staging (MAP_READ | COPY_DST).
 - **Double buffering:** each substep reads one particle buffer and writes
   the other; `current` flips. Two bind groups per pipeline (A→B, B→A).
 - **One submit per frame:** all substeps (and the grid rebuild before
@@ -166,15 +166,22 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
 ### Spatial hash broadphase
 
 - Cell size `2r × 1.05` (the 1.05 covers the deep-sleep support test).
-- Table size `nextPowerOfTwo(2 × count)`, 8 slots per bucket. Memory
-  depends on the count, not the volume: 200,000 grains use about 19 MB.
+- Table size `nextPowerOfTwo(2 × count)`. Each bucket is a **linked
+  list**: `bucketHeads` (one `u32` per bucket) and `nextInBucket` (one
+  per particle), both storing index + 1 so 0 ends a list. 200,000 grains
+  use about 3 MB.
 - Hash: `(x·73856093) ^ (y·19349663) ^ (z·83492791) & mask`.
-- Build pass: `atomicAdd` on the bucket count gives each thread a unique
-  slot. Counts are cleared with `encoder.clearBuffer` before each build.
-- Lookup: 27 cells; a candidate is kept only if `cellOf(candidate) ==
-  cell being visited`, which filters hash collisions and prevents a
-  grain being counted twice.
-- The physics module declares the counts as `array<u32>` (read-only); the
+- Build pass: `nextInBucket[tid] = atomicExchange(&bucketHeads[b], tid +
+  1)`. Heads are cleared with `encoder.clearBuffer` before each build.
+- Lookup: 27 cells; buckets already walked are skipped (two cells can
+  share one), then the list is followed to its end. Strangers from other
+  cells that share the bucket are rejected by the distance tests.
+- **Never give buckets a fixed capacity.** The first version had 8 slots.
+  This simulation lets grains overlap heavily under compression: measured
+  mid-pour, one cell at the neck held 938 of 10,000 grains. Grains past
+  the eighth were dropped, so the grid behaved differently from brute
+  force (sand stuck in a pile to one side).
+- The physics module declares the heads as `array<u32>` (read-only); the
   build module declares the same buffer as `array<atomic<u32>>`
   (read-write). WGSL only allows atomics in read-write storage.
 - `js/models/grid.js` is a CPU reference of the same arithmetic. A unit
@@ -253,13 +260,16 @@ frame. Two-phase start: `startFlip()` → scene flip (1.2 s, smoothstep) →
 
 ## Tests
 
-Node (69): `geometry` (10), `packing` (10), `cpuPhysics` (11, including
-ports of the app's CPU tests), `grid` (7), `config` (10), `timer` (8),
+Node (70): `geometry` (10), `packing` (10), `cpuPhysics` (11, including
+ports of the app's CPU tests), `grid` (8), `config` (10), `timer` (8),
 `settings` (13).
 
-Browser (15, `gpu-tests.html`): gravity, floor, flip transform, drain,
+Browser (16, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
 settle-and-sleep, wake-on-support-loss and a 5,000-grain containment run,
-each for `brute` and `grid`, plus "brute force and grid agree".
+each for `brute` and `grid`, plus "brute force and grid agree" and "a
+crowded bucket keeps everyone". The agreement test uses a loose pile and
+cannot be made crowded: with many simultaneous contacts the result
+depends on visiting order, so the two searches legitimately differ.
 
 Rule of thumb, as in the app: decision logic goes in `js/models` or
 `js/services` as pure functions with explicit inputs, and is tested
@@ -309,6 +319,16 @@ line.**
 **One-time repo setup:** Settings → Pages → Build and deployment → Source
 → **GitHub Actions**.
 
+## Open issue: blank start in Direct mode on real browsers
+
+Reported on the first deploy: nothing drawn at start-up in Direct mode
+until the first run (one browser) or until switching mode and back
+(macOS Safari). Not reproducible in headless Chromium, cause unknown.
+Since then: resize is checked every frame, three.js internals are not
+touched before the first draw, and `uncapturederror` is shown in the
+on-screen notice. If it recurs, the notice text is the first thing to ask
+for.
+
 ## Gotchas
 
 - **Never give the instance buffer `DynamicDrawUsage`.** three.js
@@ -317,8 +337,9 @@ line.**
   shows the spawn state forever while the physics runs correctly
   underneath. Default usage uploads only when `needsUpdate` is set.
 - **three.js creates the vertex buffer on first draw.** `#vertexBuffer()`
-  asks `renderer.backend.get(instances).buffer` lazily and direct mode
-  skips the copy until it exists. This is three.js internals, so recheck
+  asks `renderer.backend.get(instances).buffer` only after the sand has
+  been drawn once (`sandDrawn`), looks it up fresh every frame, and
+  direct mode skips the copy until it exists. This is three.js internals, so recheck
   it when upgrading three.
 - **Keep a reference to the `GPUAdapter`** (it is on
   `window.shiftingSands`). Cheap insurance against it being collected.

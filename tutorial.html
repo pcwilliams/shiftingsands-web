@@ -260,30 +260,35 @@ staging.unmap();</code></pre>
   let h = (u32(c.x) * 73856093u) ^ (u32(c.y) * 19349663u) ^ (u32(c.z) * 83492791u);
   return h &amp; u.tableMask;       // table size is a power of two
 }</code></pre>
-  <p>The table has about two to four buckets per particle and eight slots per bucket. For 200,000 grains that is about 19 MB.</p>
+  <p>The table has two to four buckets per particle. Each bucket is a linked list: one "head" per bucket and one "next" link per particle. For 200,000 grains that is about 3 MB.</p>
   <h3>Building it in parallel: atomics</h3>
-  <p>One thread per particle adds itself to its bucket. Many threads may pick the same bucket at the same moment, so the bucket's counter has to be atomic:</p>
-  <pre><code>@group(0) @binding(2) var&lt;storage, read_write&gt; bucketCounts: array&lt;atomic&lt;u32&gt;&gt;;
+  <p>One thread per particle adds itself to its bucket. Many threads may pick the same bucket at the same moment, so the bucket's head has to be atomic:</p>
+  <pre><code>@group(0) @binding(2) var&lt;storage, read_write&gt; bucketHeads: array&lt;atomic&lt;u32&gt;&gt;;
+@group(0) @binding(3) var&lt;storage, read_write&gt; nextInBucket: array&lt;u32&gt;;
 
 let bucket = hashCell(cellOf(particlesIn[tid].posRadius.xyz));
-let slot = atomicAdd(&amp;bucketCounts[bucket], 1u);   // returns the value before the add
-if (slot &lt; BUCKET_CAPACITY) {
-  bucketSlots[bucket * BUCKET_CAPACITY + slot] = tid;
-}</code></pre>
-  <p><code>atomicAdd</code> returns the old value, so every thread gets a slot number no other thread got. It is the same idea as <code>std::atomic::fetch_add</code> handing out array indices.</p>
+// Swap my index in; whoever was there before becomes my "next".
+nextInBucket[tid] = atomicExchange(&amp;bucketHeads[bucket], tid + 1u);</code></pre>
+  <p>This is the lock-free stack push you would write with <code>std::atomic::exchange</code>. It can't lose a particle however many threads collide. Indices are stored plus one, so zero means "end of list" and clearing the heads empties every bucket.</p>
   <h3>Looking things up</h3>
-  <p>Two different cubes can hash to the same bucket. The lookup deals with that by checking, for each candidate, which cube it is really in:</p>
-  <pre><code>if (any(cellOf(other.posRadius.xyz) != cell)) { continue; }</code></pre>
-  <p>That check also stops a grain being counted twice when two of the 27 cubes share a bucket.</p>
+  <p>For each of the 27 cubes: hash it, then walk that bucket's list. Two details:</p>
+  <ul>
+    <li>Two of the 27 cubes can hash to the same bucket, so the loop remembers which buckets it has walked and skips repeats. Otherwise a neighbour would be pushed away twice.</li>
+    <li>A bucket can also hold grains from some unrelated cube with the same hash. Those fail the distance test like any other non-neighbour.</li>
+  </ul>
+  <div class="reference">
+    <span class="who">The first version was wrong</span>
+    The grid first shipped with eight fixed slots per bucket, on the reasoning that spheres this size can't put more than a few centres in one cube. With the grid on, sand piled up to one side and stuck; with N² it flowed. The reasoning assumed grains don't overlap much, and in this simulation they do: measured mid-pour, one cell at the neck held 938 grains. Every grain past the eighth was invisible to its neighbours. The test that "proved" grid and N² equal had only used a loose, freshly flipped pile. Linked lists have no capacity to exceed, and there is now a test with 31 grains in one bucket.
+  </div>
   <h3>One kernel, two searches</h3>
   <p>The kernel's three neighbour loops (collision, light-sleep wake, deep-sleep support) are generated from one JavaScript template, <code>forEachNeighbour(broadphase, centre, body)</code>. It emits either the all-pairs loop or the 27-cube loop around the same body. Everything else in the kernel is shared, and both variants use the same substep table. So the <strong>Grid / N²</strong> switch changes how neighbours are found and nothing else, and you can flip it mid-run with the Stats readout open.</p>
 
   <h2 id="testing">10. Testing a GPU program</h2>
   <p>There are three layers.</p>
   <ul>
-    <li><strong>Node, 69 tests.</strong> The glass, the packing, the CPU physics (including the app's ten CPU tests), the timer, settings and URL parsing. Also <code>models/grid.js</code>, a plain JavaScript version of the spatial hash. One test builds a jittered pile of 3,000 grains and checks that the hash finds every true contact with no duplicates.</li>
-    <li><strong>The browser, 15 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search.</li>
-    <li><strong>Cross-checking.</strong> The most useful single test: start both searches from the same moving state, step each, read both back, and compare. The largest difference was a few millionths of a unit (1 to 3 × 10⁻⁶ across runs), which is floating-point summation order. If the hash were dropping neighbours this test would show it.</li>
+    <li><strong>Node, 70 tests.</strong> The glass, the packing, the CPU physics (including the app's ten CPU tests), the timer, settings and URL parsing. Also <code>models/grid.js</code>, a plain JavaScript version of the spatial hash. One test builds a jittered pile of 3,000 grains and checks that the hash finds every true contact with no duplicates.</li>
+    <li><strong>The browser, 16 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search.</li>
+    <li><strong>Cross-checking.</strong> The most useful single test: start both searches from the same moving state, step each, read both back, and compare. The largest difference was a few millionths of a unit (1 to 3 × 10⁻⁶ across runs), which is floating-point summation order. That test alone was not enough, as section 9 admits: it used a loose pile. A second test packs 31 grains into one bucket and checks the two searches still agree exactly.</li>
   </ul>
   <p>The page was also driven headless, in Chromium on a software GPU, to take the screenshots here. That found two environment problems (recorded in <code>CLAUDE.md</code>) and one real bug (the one in section 8).</p>
 

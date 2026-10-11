@@ -122,12 +122,13 @@ export class GpuPhysics {
         label: 'profile-table', size: 256 * 4,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       }),
-      bucketCounts: device.createBuffer({
-        label: 'bucket-counts', size: this.grid.tableSize * 4,
+      // The spatial hash: one list head per bucket, one "next" link per particle.
+      bucketHeads: device.createBuffer({
+        label: 'bucket-heads', size: this.grid.tableSize * 4,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       }),
-      bucketSlots: device.createBuffer({
-        label: 'bucket-slots', size: this.grid.tableSize * this.grid.capacity * 4,
+      bucketNext: device.createBuffer({
+        label: 'bucket-next', size: Math.max(count, 1) * 4,
         usage: GPUBufferUsage.STORAGE,
       }),
       // MAP_READ buffers are the only kind JavaScript can read, and they can't
@@ -161,11 +162,11 @@ export class GpuPhysics {
       ])),
       grid: [[a, b], [b, a]].map(([read, write]) => group(pipelines.grid, [
         entry(0, buffers.uniforms), entry(1, read), entry(2, write), entry(3, buffers.profile),
-        entry(4, buffers.bucketCounts), entry(5, buffers.bucketSlots),
+        entry(4, buffers.bucketHeads), entry(5, buffers.bucketNext),
       ])),
       build: [a, b].map((read) => group(pipelines.build, [
         entry(0, buffers.uniforms), entry(1, read),
-        entry(2, buffers.bucketCounts), entry(3, buffers.bucketSlots),
+        entry(2, buffers.bucketHeads), entry(3, buffers.bucketNext),
       ])),
       snap: [a, b].map((particles) => group(pipelines.snap, [
         entry(0, buffers.uniforms), entry(1, particles),
@@ -228,7 +229,7 @@ export class GpuPhysics {
     for (let s = 0; s < substeps; s++) {
       if (useGrid) {
         // Empty the hash table, then refill it from the current positions.
-        encoder.clearBuffer(buffers.bucketCounts);
+        encoder.clearBuffer(buffers.bucketHeads);
         const build = encoder.beginComputePass({ label: 'grid-build' });
         build.setPipeline(pipelines.build);
         build.setBindGroup(0, bindGroups.build[this.current]);
@@ -308,13 +309,13 @@ export class GpuPhysics {
   get memoryBytes() {
     if (!this.buffers) return 0;
     const b = this.buffers;
-    return b.particles[0].size * 3 + b.bucketCounts.size + b.bucketSlots.size + b.profile.size;
+    return b.particles[0].size * 3 + b.bucketHeads.size + b.bucketNext.size + b.profile.size;
   }
 
   destroyBuffers() {
     if (!this.buffers) return;
     const b = this.buffers;
-    for (const buffer of [...b.particles, b.uniforms, b.profile, b.bucketCounts, b.bucketSlots, b.staging]) {
+    for (const buffer of [...b.particles, b.uniforms, b.profile, b.bucketHeads, b.bucketNext, b.staging]) {
       buffer.destroy();
     }
     this.buffers = null;

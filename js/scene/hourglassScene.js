@@ -47,6 +47,7 @@ export class HourglassScene {
   static async create(canvas, device) {
     const scene = new HourglassScene(canvas, device);
     await scene.renderer.init();
+    scene.fittedWidth = -1;   // size again now the backend exists
     if (device) scene.engine = await GpuPhysics.create(device);
     return scene;
   }
@@ -213,6 +214,7 @@ export class HourglassScene {
     // needsUpdate is set, which CPU and GPU modes do and direct mode doesn't.
     this.instances = instances;
     this.gpuVertexBuffer = null;
+    this.sandDrawn = false;
 
     const sphere = new THREE.IcosahedronGeometry(1, sphereDetail(count));
     const geometry = new THREE.InstancedBufferGeometry();
@@ -258,10 +260,12 @@ export class HourglassScene {
 
   // three.js creates the GPU vertex buffer the first time the mesh is drawn.
   // After that we can ask the backend for it and copy into it directly.
+  // Nothing is asked of three.js's internals until it has drawn this sand at
+  // least once, and the answer is looked up fresh each frame rather than
+  // kept, so a buffer three.js replaced can never be written to by mistake.
   #vertexBuffer() {
-    if (!this.gpuVertexBuffer) {
-      this.gpuVertexBuffer = this.renderer.backend.get(this.instances)?.buffer ?? null;
-    }
+    if (!this.sandDrawn) return null;
+    this.gpuVertexBuffer = this.renderer.backend.get(this.instances)?.buffer ?? null;
     return this.gpuVertexBuffer;
   }
 
@@ -343,14 +347,34 @@ export class HourglassScene {
   }
 
   render() {
+    this.resizeIfNeeded();
     this.renderer.render(this.scene, this.camera);
+    this.sandDrawn = true;
+  }
+
+  /**
+   * Resize if the canvas's on-screen size or the pixel ratio has changed.
+   * Called every frame: it is three comparisons, and it catches everything a
+   * 'resize' event can miss (a canvas with no layout yet at start-up, mobile
+   * browser bars sliding in and out, dragging between displays).
+   */
+  resizeIfNeeded() {
+    const ratio = Math.min(globalThis.devicePixelRatio || 1, 2);
+    if (this.canvas.clientWidth !== this.fittedWidth ||
+        this.canvas.clientHeight !== this.fittedHeight || ratio !== this.fittedRatio) {
+      this.resize();
+    }
   }
 
   /** Fit the hourglass to the canvas, leaving room for the controls. */
   resize() {
-    const width = this.canvas.clientWidth || 1;
-    const height = this.canvas.clientHeight || 1;
-    this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
+    this.fittedWidth = this.canvas.clientWidth;
+    this.fittedHeight = this.canvas.clientHeight;
+    this.fittedRatio = Math.min(globalThis.devicePixelRatio || 1, 2);
+    if (!this.fittedWidth || !this.fittedHeight) return;   // not laid out yet; try next frame
+    const width = this.fittedWidth;
+    const height = this.fittedHeight;
+    this.renderer.setPixelRatio(this.fittedRatio);
     this.renderer.setSize(width, height, false);
     const aspect = width / height;
     this.camera.aspect = aspect;

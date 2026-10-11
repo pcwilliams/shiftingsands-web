@@ -61,7 +61,7 @@ a { color: var(--accent); }
       <span class="badge">WGSL compute</span>
       <span class="badge">TSL materials</span>
       <span class="badge">No build step</span>
-      <span class="badge">69 node + 15 GPU tests</span>
+      <span class="badge">70 node + 16 GPU tests</span>
     </div>
   </div>
 
@@ -223,9 +223,9 @@ graph TD
   <h3>The spatial hash</h3>
   <table>
     <tr><th>Step</th><th>What happens</th></tr>
-    <tr><td>Clear</td><td><code>encoder.clearBuffer</code> zeroes one counter per bucket.</td></tr>
-    <tr><td>Build</td><td>One thread per particle: hash its cell, <code>atomicAdd</code> the bucket counter to claim a slot, write its index there.</td></tr>
-    <tr><td>Lookup</td><td>For each of the 27 cells around me: hash it, walk up to 8 slots, skip anything whose real cell isn't this one.</td></tr>
+    <tr><td>Clear</td><td><code>encoder.clearBuffer</code> zeroes one list head per bucket.</td></tr>
+    <tr><td>Build</td><td>One thread per particle: hash its cell, <code>atomicExchange</code> itself onto the front of that bucket's linked list.</td></tr>
+    <tr><td>Lookup</td><td>For each of the 27 cells around me: hash it, skip a bucket already walked, follow the list to its end.</td></tr>
   </table>
   <p>Table size is the next power of two above twice the particle count, so memory follows the count and not the volume of the glass.</p>
 

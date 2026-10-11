@@ -4,7 +4,7 @@ import { createProfile, neckRadiusForParticle } from '../js/models/hourglassProf
 import { STRIDE, radiusForCount, packedParticles, mulberry32 } from '../js/models/packing.js';
 import {
   computeGrid, cellCoords, hashCell, buildGridCPU, neighbourCandidates,
-  nextPowerOfTwo, BUCKET_CAPACITY, CELL_SCALE,
+  nextPowerOfTwo, CELL_SCALE,
 } from '../js/models/grid.js';
 
 function pile(count, seed = 3) {
@@ -30,7 +30,8 @@ test('table size depends on the particle count, not the volume', () => {
   assert.equal(large.tableSize, 524288);
   assert.equal(large.tableMask, large.tableSize - 1);
   // 200k grains at half size would need about ten million cells as a dense array.
-  assert.ok(large.tableSize * BUCKET_CAPACITY * 4 < 32 * 1024 * 1024);
+  // Heads plus one link per particle is under 3 MB.
+  assert.ok(large.tableSize * 4 + 200000 * 4 < 3 * 1024 * 1024);
 });
 
 test('cells are wide enough for contact and for the 1.05x support test', () => {
@@ -46,17 +47,41 @@ test('cell coordinates are non-negative everywhere inside the glass', () => {
   }
 });
 
-test('hash stays inside the table and spreads a pile across buckets', () => {
+test('every particle is in exactly one bucket list', () => {
   const count = 5000;
   const { radius, data } = pile(count);
   const grid = computeGrid(radius, count);
   const built = buildGridCPU(grid, data, count);
-  assert.equal(built.dropped, 0, 'no bucket should overflow');
-  assert.ok(Math.max(...built.counts) <= BUCKET_CAPACITY);
+  const seen = new Uint8Array(count);
+  let total = 0;
+  for (let b = 0; b < grid.tableSize; b++) {
+    for (let link = built.heads[b]; link !== 0; link = built.next[link - 1]) {
+      seen[link - 1]++;
+      total++;
+    }
+  }
+  assert.equal(total, count);
+  assert.ok(seen.every((n) => n === 1));
   for (let cx = 0; cx < 40; cx += 7) {
     const h = hashCell(grid, cx, cx * 3, cx + 11);
     assert.ok(h >= 0 && h <= grid.tableMask);
   }
+});
+
+test('a crowded cell loses nobody', () => {
+  // 500 grains inside one grain's width: what the neck looks like mid-pour.
+  const count = 500;
+  const radius = 0.01;
+  const random = mulberry32(5);
+  const data = new Float32Array(count * STRIDE);
+  for (let i = 0; i < count; i++) {
+    data.set([(random() - 0.5) * radius, 0.2 + (random() - 0.5) * radius, (random() - 0.5) * radius, radius], i * STRIDE);
+  }
+  const grid = computeGrid(radius, count);
+  const built = buildGridCPU(grid, data, count);
+  const candidates = neighbourCandidates(grid, built, 0, 0.2, 0);
+  assert.equal(new Set(candidates).size, count);
+  assert.equal(candidates.length, count);
 });
 
 test('grid candidates include every true contact, with no duplicates', () => {
@@ -67,7 +92,7 @@ test('grid candidates include every true contact, with no duplicates', () => {
   let contacts = 0;
   for (let i = 0; i < count; i += 7) {
     const a = i * STRIDE;
-    const candidates = neighbourCandidates(grid, built, data, data[a], data[a + 1], data[a + 2]);
+    const candidates = neighbourCandidates(grid, built, data[a], data[a + 1], data[a + 2]);
     assert.equal(new Set(candidates).size, candidates.length, 'duplicate candidate');
     const found = new Set(candidates);
     for (let j = 0; j < count; j++) {
@@ -91,13 +116,14 @@ test('candidates per particle stay small as the count grows', () => {
     let total = 0, samples = 0;
     for (let i = 0; i < count; i += 53) {
       const a = i * STRIDE;
-      total += neighbourCandidates(grid, built, data, data[a], data[a + 1], data[a + 2]).length;
+      total += neighbourCandidates(grid, built, data[a], data[a + 1], data[a + 2]).length;
       samples++;
     }
     return total / samples;
   };
   const few = average(2000);
   const many = average(40000);
-  assert.ok(few < 40 && many < 40, `few=${few} many=${many}`);
+  // About 45: the true neighbours plus a few strangers that share a bucket.
+  assert.ok(few < 60 && many < 60, `few=${few} many=${many}`);
   assert.ok(many < few * 1.6, 'cost per particle should not scale with N');
 });

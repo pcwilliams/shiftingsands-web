@@ -53,7 +53,9 @@
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) throw new Error('WebGPU is present but no GPU adapter is available.');
     const device = await adapter.requestDevice();
-    const results = await runGpuSelfTest(device, row);
+    // gpu-tests.html?only=crowded runs just the tests whose name contains that text.
+    const only = new URLSearchParams(location.search).get('only') ?? '';
+    const results = await runGpuSelfTest(device, row, only);
     const failed = results.filter((r) => !r.pass).length;
     summary.textContent = failed ? `${failed} of ${results.length} failed` : `All ${results.length} passed`;
     window.gpuTestResults = results;

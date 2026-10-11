@@ -9,9 +9,15 @@
 // A plain 3D array of cubes would be mostly empty air (the sand fills a small
 // part of the glass), and with 200,000 particles at the smallest size it
 // would not fit in one GPU buffer. So the cube coordinates are hashed into a
-// table whose size depends on the particle count, not on the volume. Two different cubes can
-// land in the same bucket; the lookup filters those out by checking which
-// cube each candidate really came from.
+// table whose size depends on the particle count, not on the volume.
+//
+// Each bucket is a linked list of particle indices, so a bucket can hold any
+// number of particles. That matters here: this simulation lets grains overlap
+// heavily where the pile is squeezed (the neck above all), and a bucket with
+// a fixed number of slots silently loses the grains that don't fit.
+//
+// Two different cubes can land in the same bucket. That only adds candidates
+// which the distance test then rejects.
 //
 // The functions here are the reference implementation. The WGSL in
 // physics/shaders.js does the same arithmetic on the GPU, and the tests check
@@ -19,8 +25,6 @@
 
 /** Cells are a little wider than a diameter so the 1.05x support test fits. */
 export const CELL_SCALE = 1.05;
-/** Particle slots per bucket. */
-export const BUCKET_CAPACITY = 8;
 /** Buckets per particle, before rounding up to a power of two. */
 export const TABLE_LOAD = 2;
 
@@ -39,7 +43,6 @@ export function computeGrid(particleRadius, count) {
     origin: ORIGIN,
     tableSize,
     tableMask: tableSize - 1,
-    capacity: BUCKET_CAPACITY,
   };
 }
 
@@ -56,41 +59,41 @@ export function hashCell(grid, cx, cy, cz) {
 }
 
 /**
- * CPU build of the structure the GPU builds with atomics: a count per bucket,
- * and up to `capacity` particle indices per bucket.
+ * CPU build of the structure the GPU builds with atomics.
+ * heads[b] is the first particle in bucket b, next[i] the one after particle
+ * i. Both store index + 1, so 0 means "end of list".
  */
 export function buildGridCPU(grid, particles, count, stride = 8) {
-  const counts = new Uint32Array(grid.tableSize);
-  const slots = new Uint32Array(grid.tableSize * grid.capacity);
-  let dropped = 0;
+  const heads = new Uint32Array(grid.tableSize);
+  const next = new Uint32Array(count);
   for (let i = 0; i < count; i++) {
     const o = i * stride;
     const bucket = hashCell(grid, ...cellCoords(grid, particles[o], particles[o + 1], particles[o + 2]));
-    const slot = counts[bucket]++;
-    if (slot < grid.capacity) slots[bucket * grid.capacity + slot] = i;
-    else dropped++;
+    next[i] = heads[bucket];
+    heads[bucket] = i + 1;
   }
-  return { counts, slots, dropped };
+  return { heads, next };
 }
 
-/** Indices of every particle in the 27 cubes around (x, y, z). No duplicates. */
-export function neighbourCandidates(grid, built, particles, x, y, z, stride = 8) {
+/**
+ * Indices of every particle in the buckets of the 27 cubes around (x, y, z).
+ * No duplicates. May include particles from unrelated cubes that share a
+ * bucket; callers reject those by distance.
+ */
+export function neighbourCandidates(grid, built, x, y, z) {
   const [cx, cy, cz] = cellCoords(grid, x, y, z);
   const out = [];
+  const seen = [];
   for (let dz = -1; dz <= 1; dz++) {
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const nx = cx + dx, ny = cy + dy, nz = cz + dz;
         if (nx < 0 || ny < 0 || nz < 0) continue;
         const bucket = hashCell(grid, nx, ny, nz);
-        const n = Math.min(built.counts[bucket], grid.capacity);
-        for (let s = 0; s < n; s++) {
-          const j = built.slots[bucket * grid.capacity + s];
-          const o = j * stride;
-          // Another cube may share this bucket. Keep j only if it really is
-          // in the cube being visited, which also stops it being seen twice.
-          const [jx, jy, jz] = cellCoords(grid, particles[o], particles[o + 1], particles[o + 2]);
-          if (jx === nx && jy === ny && jz === nz) out.push(j);
+        if (seen.includes(bucket)) continue;
+        seen.push(bucket);
+        for (let link = built.heads[bucket]; link !== 0; link = built.next[link - 1]) {
+          out.push(link - 1);
         }
       }
     }

@@ -7,6 +7,7 @@
 import { createProfile, neckRadiusForParticle } from '../models/hourglassProfile.js';
 import { STRIDE, radiusForCount, packedParticles, mulberry32 } from '../models/packing.js';
 import { summarise } from '../physics/cpuSimulation.js';
+import { computeGrid, cellCoords, hashCell } from '../models/grid.js';
 import { GpuPhysics } from '../physics/gpuPhysics.js';
 
 const DT = 1 / 60;
@@ -140,10 +141,68 @@ async function broadphasesAgree(engine) {
   return `max difference ${worst.toExponential(1)}`;
 }
 
-export async function runGpuSelfTest(device, report = () => {}) {
+/**
+ * One touching pair, plus thirty lone grains placed in far-apart cells chosen
+ * because they hash to the pair's bucket. The bucket's list is long, and the
+ * pair must still find each other. (A bucket with a fixed number of slots
+ * failed exactly here: measured mid-pour, one cell at the neck held 938
+ * grains.) With a single contact the result doesn't depend on visiting
+ * order, so brute force and grid must match to rounding.
+ */
+async function crowdedBucketKeepsEveryone(engine) {
+  const radius = 0.008;
+  const fillers = 30;
+  const count = fillers + 2;
+  const grid = computeGrid(radius, count);
+  const a = [0, -0.3, 0];
+  const b = [0.012, -0.3, 0];
+  const bucket = hashCell(grid, ...cellCoords(grid, ...a));
+
+  const data = new Float32Array(count * STRIDE);
+  // The pair goes last, where slot-per-bucket schemes run out of room.
+  const pairAt = fillers * STRIDE;
+  data.set(particle(...a, radius), pairAt);
+  data.set(particle(...b, radius), pairAt + STRIDE);
+  const chosen = [];
+  const across = Math.ceil(0.5 / grid.cellSize);
+  const up = Math.ceil(1.04 / grid.cellSize);
+  search:
+  for (let cy = 0; cy < up; cy++) {
+    for (let cx = 0; cx < across; cx++) {
+      for (let cz = 0; cz < across; cz++) {
+        if (hashCell(grid, cx, cy, cz) !== bucket) continue;
+        const centre = [0, 1, 2].map((k) => grid.origin[k] + ([cx, cy, cz][k] + 0.5) * grid.cellSize);
+        const inGlass = Math.hypot(centre[0], centre[2]) < 0.14 && Math.abs(centre[1]) > 0.16 && Math.abs(centre[1]) < 0.4;
+        const clear = [a, b, ...chosen].every((p) => Math.hypot(p[0] - centre[0], p[1] - centre[1], p[2] - centre[2]) > radius * 3);
+        if (!inGlass || !clear) continue;
+        chosen.push(centre);
+        if (chosen.length === fillers) break search;
+      }
+    }
+  }
+  expect(chosen.length === fillers, `only found ${chosen.length} cells sharing the bucket`);
+  chosen.forEach((p, i) => data.set(particle(...p, radius), i * STRIDE));
+
+  const results = {};
+  for (const bp of ['brute', 'grid']) {
+    configure(engine, bp, count, radius, data);
+    engine.gravity = 0;
+    engine.step(DT);
+    results[bp] = await read(engine);
+  }
+  const gap = (p) => Math.hypot(p[pairAt] - p[pairAt + STRIDE], p[pairAt + 1] - p[pairAt + STRIDE + 1], p[pairAt + 2] - p[pairAt + STRIDE + 2]);
+  expect(gap(results.grid) > 0.0125, `the pair did not push apart (gap ${gap(results.grid)})`);
+  let worst = 0;
+  for (let i = 0; i < count * STRIDE; i++) worst = Math.max(worst, Math.abs(results.brute[i] - results.grid[i]));
+  expect(worst < 1e-5, `largest difference ${worst}`);
+  return `${fillers + 1} grains in one bucket, max difference ${worst.toExponential(1)}`;
+}
+
+export async function runGpuSelfTest(device, report = () => {}, only = '') {
   const engine = await GpuPhysics.create(device);
   const results = [];
   const run = async (name, fn) => {
+    if (only && !name.includes(only)) return;
     const started = performance.now();
     let entry;
     try {
@@ -162,6 +221,7 @@ export async function runGpuSelfTest(device, report = () => {}) {
     }
   }
   await run('brute force and grid agree', () => broadphasesAgree(engine));
+  await run('a crowded bucket keeps everyone', () => crowdedBucketKeepsEveryone(engine));
   engine.destroyBuffers();
   return results;
 }

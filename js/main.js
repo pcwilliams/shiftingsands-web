@@ -136,13 +136,22 @@ async function main() {
   }
 
   if (device) {
+    // WebGPU reports most mistakes asynchronously and silently: the bad call
+    // returns normally and the frame just comes out wrong. Put the first one
+    // on screen so a blank hourglass explains itself.
+    let reported = false;
+    device.addEventListener('uncapturederror', (event) => {
+      console.error('WebGPU error:', event.error.message);
+      if (reported) return;
+      reported = true;
+      controls.notify(`WebGPU error: ${event.error.message.slice(0, 220)}`);
+    });
     device.lost.then((info) => {
       if (info.reason !== 'destroyed') controls.notify('The GPU device was lost. Reload the page to carry on.');
     });
   }
 
   rebuild();
-  globalThis.addEventListener('resize', () => scene.resize());
 
   // ── Frame loop ─────────────────────────────────────────────────────────
   let last = 0;
