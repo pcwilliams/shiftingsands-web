@@ -261,7 +261,30 @@ bucket, so a bucket is a contiguous range.
   real hardware, but the behaviour is identical): same drain curve, same
   settled pile (level 0.4 radii), all asleep. Physics dispatch alone
   roughly even with the list grid mid-pour; the sort passes add a
-  baseline that is mostly barrier emulation. No phone numbers yet.
+  baseline that is mostly barrier emulation.
+- **Measured on the iPhone 16 Pro at 100,000 grains** (build 6b98705,
+  Direct, 5 s, three runs in a row; charts in `docs/phone-100k-runs.png`):
+  Grid: flip 60 to 80 ms, pour spike 171 ms for about 1 s, settled 3 ms.
+  Sorted run 1: flat, 21 ms worst all run. Sorted run 2: flip about
+  10 ms, pour plateau 194 ms for about 2.5 s, settled 3 ms. The flip win
+  (about 5x) is the coherence effect. The pour cost is the neck jam:
+  every grain there sees up to 32 × 27 = 864 candidates, nearly all real
+  overlapping contacts, so cost scales with jam size; sorting makes visits
+  cheaper but not fewer. Jam size varies run to run (variable `dt`,
+  atomic rank order). At 150,000 to 200,000 the user saw 500 to 1,000 ms
+  steps in the pour, so about 100,000 is the practical ceiling there.
+- **Unexplained, watch for it:** Sorted run 1 left towers standing up out
+  of the settled pile. Run 2 settled level (the levellest of the three;
+  Grid's leaned right). Never seen in the tests (largest headless sorted
+  run is 10,000). If it recurs, reproduce before changing anything else.
+- **Next step agreed in principle, not started:** a total visit budget
+  per grain on Sorted (say 64 to 96 across the 27 cells, sampled evenly).
+  Then recheck drain curve, pile levelness, and the 150k to 200k pour.
+  The root cause remains the neck pinch (see Known behaviour).
+- **Power management:** the user wondered whether the phone throttles.
+  Thermal throttling would lift the flip and the tail too, not only the
+  pour. Test: several runs in a row with Reset and `?seed=4`; if only the
+  pour varies, it's the jam.
 - When benchmarking stages in isolation, run clear + build + physics
   together each time. Repeating `countBuckets` without the clear inflates
   every count and makes the sorted physics look 2x slower than it is
@@ -483,7 +506,9 @@ places: about 40 to 60 ms per step during the flip (every grain awake and
 tumbling) and a peak of 169 ms in the pour, about 3 ms once settled.
 Response so far: the `sorted` broadphase, added as a third option so the
 whole-run chart can compare it with `grid` on the phone before anything
-is replaced. Awaiting those numbers. Other candidates: skipping the
+is replaced. Result (see the sorted grid section): the flip drops to
+about 10 ms; the pour still depends on the size of the neck jam. Other
+candidates: a per-grain visit budget on Sorted (next); skipping the
 light-sleep neighbour scan where possible; fewer triangles per grain;
 reusing the previous substep's sort order.
 

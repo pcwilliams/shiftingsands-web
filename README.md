@@ -30,8 +30,10 @@ it.
     It gives the same physics as N², only faster.
   - **Sorted**: the same spatial hash, but every substep the grains are
     counting-sorted by cell, so each cell is one run of memory and the
-    GPU's threads work through the pile cell by cell. It's here to compare
-    against Grid on real hardware.
+    GPU's threads work through the pile cell by cell. On an iPhone 16 Pro
+    at 100,000 grains it makes the flip about five times faster than Grid;
+    the pour still slows down when the neck jams (the tutorial has the
+    charts).
 - **A glass that fits the sand**: the neck is rebuilt for each grain size
   so that one grain just fits through.
 - **A real flip**: gravity turns with the glass during the 1.2 second

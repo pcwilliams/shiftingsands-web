@@ -326,9 +326,21 @@ for (var offset = 1u; offset &lt; 256u; offset *= 2u) {
   <h3>Crowded cells, sampled evenly</h3>
   <p>A range also changes what the walk limit can do. A list can only be cut short: the first 32 grains, whichever they happen to be. A range can be sampled. When a bucket holds more than 32 grains, a grain visits 32 slots spread evenly along it from a random start, so it hears from the whole crowd, not one end of it. When the bucket fits, it visits every slot, still from a random start, so the within-cell order is scrambled like the sweep order is. (The spreading takes two integer divisions per visit, which GPUs do in software, so only crowded buckets pay for it.)</p>
   <div class="reference">
-    <span class="who">What it costs, and what isn't known yet</span>
-    Four dispatches and a buffer clear per substep instead of two, and about 12 MB more at 200,000 grains. On the software GPU used for the tests, the sort's own passes are the expensive part, because it emulates <code>workgroupBarrier</code> on a CPU. The first version, 256 buckets per workgroup, spent 40 ms a step in the scan at 10,000 grains. With 1,024 per workgroup it spends 10 ms. A real GPU should scan half a million counters in well under a millisecond, but that hasn't been measured. The neighbour search itself came out about even with the lists there. A software GPU says nothing about caches or latency hiding on a phone, which is the whole point of sorting. The drain curve, the settled pile (level to 0.4 radii) and the sleep counts match the list grid exactly. Whether Sorted is faster is a question for your phone's chart.
+    <span class="who">What it costs on a software GPU</span>
+    Four dispatches and a buffer clear per substep instead of two, and about 12 MB more at 200,000 grains. On the software GPU used for the tests, the sort's own passes are the expensive part, because it emulates <code>workgroupBarrier</code> on a CPU. The first version, 256 buckets per workgroup, spent 40 ms a step in the scan at 10,000 grains. With 1,024 per workgroup it spends 10 ms. The neighbour search itself came out about even with the lists there. A software GPU says nothing about caches or latency hiding on a phone, which is the whole point of sorting. The drain curve, the settled pile (level to 0.4 radii) and the sleep counts match the list grid exactly.
   </div>
+  <h3>What the phone said</h3>
+  <p>Three runs at 100,000 grains on an iPhone 16 Pro, Direct mode, five-second timer, one after the other. Note the first Sorted chart's scale: 25 ms, not 200.</p>
+  <div class="browser-frame"><img src="docs/phone-100k-runs.png" alt="Three Stats charts at 100,000 grains. Grid: a 60 to 80 ms hump in the flip and a 171 ms spike in the pour. Sorted run 1: flat, 21 ms at worst. Sorted run 2: flat through the flip, then a 194 ms plateau for about two and a half seconds in the pour."></div>
+  <table>
+    <tr><th></th><th>Flip (every grain awake)</th><th>Pour</th><th>Settled</th></tr>
+    <tr><td>Grid</td><td>60 to 80 ms</td><td>171 ms spike, about 1 s</td><td>about 3 ms</td></tr>
+    <tr><td>Sorted, run 1</td><td>about 10 ms</td><td>none: 21 ms at worst all run</td><td>about 3 ms</td></tr>
+    <tr><td>Sorted, run 2</td><td>about 10 ms</td><td>194 ms plateau, about 2.5 s</td><td>about 3 ms</td></tr>
+  </table>
+  <p><strong>The flip is a clear win, about five times faster.</strong> With every grain awake and moving, reading neighbours as adjacent runs of memory, with a workgroup's threads all in the same few cells, beats chasing lists. This is the effect sorting is meant to have, and it showed up exactly where expected.</p>
+  <p><strong>The pour is not fixed, and now we know why.</strong> The neck pinch (section 12) moves every grain in the neck onto the axis, where they overlap massively. The walk limit caps a grain at 32 per bucket, 27 buckets, so up to 864 neighbours, and in a jam nearly every one of them is a real overlapping contact that gets the full collision sum. The cost is about (grains in the jam) × 864. Sorting makes each of those visits cheaper but can't make them fewer. How big the jam gets varies from run to run, because the pour is chaotic: the frame time feeds the step, and the order grains land in a bucket depends on which GPU thread gets there first. So one Sorted run had no jam at all and the next had a long one. At 150,000 to 200,000 grains the jam grows and steps take 500 ms to a second. One run of each can't say whether Sorted jams more often than Grid.</p>
+  <p>Two other things to keep an eye on. The first Sorted run left towers standing up out of the settled pile, which no test has produced (the second run settled level, the levellest of the three; Grid's leans to the right). And phone power management may play a part, though throttling would lift the whole chart, not just the pour. A handful of runs in a row would separate the two: if the flip and the tail creep up, it's the phone; if only the pour jumps about, it's the jam.</p>
 
   <h2 id="testing">11. Testing a GPU program</h2>
   <p>There are three layers.</p>
@@ -364,7 +376,7 @@ for (var offset = 1u; offset &lt; 256u; offset *= 2u) {
   <h2 id="next">13. What was measured, and what to try next</h2>
   <div class="reference">
     <span class="who">Measured on real hardware</span>
-    The tests and screenshots were run on a software GPU at one or two frames a second. That proves the shaders are correct and says nothing about speed. The real numbers come from an iPhone 16 Pro in Direct mode with the grid, read off the Stats chart: at 20,000 grains about 2 ms a physics step with 300 ms spikes through the pour, then 15 ms at worst once the walk limit went in; at 100,000, 40 to 60 ms during the flip, a 169 ms peak in the pour and about 3 ms once settled. The count limits (2,000 / 20,000 / 200,000, and 50,000 for N²) are still estimates.
+    The tests and screenshots were run on a software GPU at one or two frames a second. That proves the shaders are correct and says nothing about speed. The real numbers come from an iPhone 16 Pro in Direct mode, read off the Stats chart. Grid at 20,000 grains: about 2 ms a physics step with 300 ms spikes through the pour, then 15 ms at worst once the walk limit went in. At 100,000: Grid takes 40 to 80 ms during the flip and peaks at about 170 ms in the pour; Sorted takes about 10 ms in the flip, and its pour ranges from no spike at all to a 194 ms plateau (section 10). Both are about 3 ms once settled. Around 100,000 is the practical ceiling on that phone: at 150,000 to 200,000 the pour takes 500 ms to a second a step. The other count limits (2,000 / 20,000, and 50,000 for N²) are still estimates.
   </div>
   <p>Good experiments on your own machine, with <code>?stats</code> on:</p>
   <ul>
@@ -376,7 +388,8 @@ for (var offset = 1u; offset &lt; 256u; offset *= 2u) {
   <p>Where to take it from here:</p>
   <ul>
     <li><strong>Time the GPU properly.</strong> WebGPU has a <code>timestamp-query</code> feature that measures a compute pass in nanoseconds. Frame time only tells you something is slow.</li>
-    <li><strong>Fewer passes for the sort.</strong> If Sorted wins, the count and scatter could reuse last substep's order (grains barely move between substeps), or the scan could use subgroup operations where the browser offers them.</li>
+    <li><strong>A visit budget per grain, on Sorted.</strong> Cap a grain's total visits across all 27 cells (say 64 to 96), sampled evenly from the ranges. A normal pile has about 45 candidates a grain and wouldn't notice; a grain in a jam would do about a tenth of the work. A contact cap did nothing on the list grid, because there the cost was walking the lists; on Sorted the visits are the cost. Check the drain curve and the pile afterwards, since it changes how a jam behaves.</li>
+    <li><strong>Fewer passes for the sort.</strong> The count and scatter could reuse last substep's order (grains barely move between substeps), or the scan could use subgroup operations where the browser offers them.</li>
     <li><strong>Fewer triangles per grain</strong> at high counts, and skipping the light-sleep neighbour scan where possible.</li>
     <li><strong>A fixed timestep.</strong> Physics that runs at 120 Hz whatever the display does, so behaviour doesn't depend on the screen.</li>
     <li><strong>A neck that meters the sand</strong>, as described above.</li>
