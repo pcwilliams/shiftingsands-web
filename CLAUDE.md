@@ -30,7 +30,7 @@ reference, except for the deliberate differences listed below.
   `new THREE.WebGPURenderer({ device })`.
 - **Persistence:** `localStorage`, keys prefixed `shiftingsands.`.
 - **Tests:** Node's built-in runner (`node --test`), 76 tests, zero
-  dependencies; plus 18 in-browser GPU tests (`gpu-tests.html`).
+  dependencies; plus 20 in-browser GPU tests (`gpu-tests.html`).
 - **Zero npm dependencies.** `package.json` exists for `"type": "module"`
   and the `npm test` alias.
 
@@ -271,6 +271,16 @@ frame. Two-phase start: `startFlip()` → scene flip (1.2 s, smoothstep) →
   `tid % 30 == 0`, so most deep sleepers stop checking for support. Here
   the counter cycles 31..60, so every sleeper checks once per 30 steps,
   which is what the app's comments describe.
+- **Support means support from underneath.** In the app, a grain counts
+  as supported if it touches any grain (`contactCount > 0`, and "any
+  neighbour within 1.05x" in the deep-sleep check). Grains fall asleep in
+  the pouring column, lose what was under them, and the leftover clump
+  holds itself up for ever (seen on an iPhone at 20,000 grains; a
+  constructed sleeping clump hangs in both searches). Here
+  `hasSupport` and the deep-sleep check require the floor (`onFloor`),
+  glass sloping inwards below the grain (`onGlassSlope`), or a grain
+  whose centre is lower by more than a quarter of the separation
+  (`holdsMeUp`). Piles still settle fully (19,999 of 20,000 asleep).
 - **No SSAO, depth of field or shadows.** Flat Lambert lighting only.
 - **Logarithmic count slider**, and a live broadphase switch.
 
@@ -297,8 +307,9 @@ Node (76): `perfHistory` (6), `geometry` (10), `packing` (10), `cpuPhysics` (11,
 ports of the app's CPU tests), `grid` (8), `config` (10), `timer` (8),
 `settings` (13).
 
-Browser (18, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
-settle-and-sleep, wake-on-support-loss, pile-rests-level-and-centred and a
+Browser (20, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
+settle-and-sleep, wake-on-support-loss, mid-air-clump-falls,
+pile-rests-level-and-centred and a
 5,000-grain containment run,
 each for `brute` and `grid`, plus "brute force and grid agree" and "a
 crowded bucket keeps everyone". The agreement test uses a loose pile and

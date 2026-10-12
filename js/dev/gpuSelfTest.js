@@ -106,6 +106,24 @@ const TESTS = {
     expect(p[7 * STRIDE + 1] < before - r, `A should fall (before=${before}, after=${p[7 * STRIDE + 1]})`);
   },
 
+  async 'a clump asleep in mid-air wakes and falls'(engine, bp) {
+    // Grains can fall asleep while stacked in the pouring column and then
+    // lose whatever was under them. If "support" just means "touching
+    // something", the leftover clump holds itself up for ever.
+    const r = 0.012;
+    const y = -0.25;   // lower chamber, well above the floor
+    const clump = [[0, y, 0], [r * 1.9, y, 0], [r * 0.95, y + r * 1.6, 0], [r * 0.95, y + r * 0.5, r * 1.6], [r * 0.95, y - r * 1.5, r * 0.5]];
+    const data = new Float32Array(clump.length * STRIDE);
+    clump.forEach((p, i) => data.set([...p, r, 0, 0, 0, 40], i * STRIDE));   // 40 = deep sleep
+    configure(engine, bp, clump.length, r, data);
+    for (let i = 0; i < 360; i++) engine.step(1 / 120);
+    const p = await read(engine);
+    let highest = -1;
+    for (let i = 0; i < clump.length; i++) highest = Math.max(highest, p[i * STRIDE + 1]);
+    expect(highest < -0.48 + r * 5, `a grain is still hanging at y=${highest.toFixed(3)}`);
+    return `all on the floor (highest y ${highest.toFixed(3)})`;
+  },
+
   async 'the pile comes to rest level and centred'(engine, bp) {
     // The glass is symmetric, so the settled pile must be too. Two earlier
     // grids failed this: one swept neighbours in a fixed direction and left

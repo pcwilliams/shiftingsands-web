@@ -291,7 +291,7 @@ nextInBucket[tid] = atomicExchange(&amp;bucketHeads[bucket], tid + 1u);</code></
   <p>There are three layers.</p>
   <ul>
     <li><strong>Node, 76 tests.</strong> The glass, the packing, the CPU physics (including the app's ten CPU tests), the timer, settings and URL parsing. Also <code>models/grid.js</code>, a plain JavaScript version of the spatial hash. One test builds a jittered pile of 3,000 grains and checks that the hash finds every true contact with no duplicates.</li>
-    <li><strong>The browser, 18 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search.</li>
+    <li><strong>The browser, 20 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search.</li>
     <li><strong>Cross-checking.</strong> The most useful single test: start both searches from the same moving state, step each, read both back, and compare. The largest difference was a few millionths of a unit (1 to 3 × 10⁻⁶ across runs), which is floating-point summation order. That test alone was not enough, as section 9 admits: it used a loose pile. A second test packs 31 grains into one bucket and checks the two searches still agree exactly.</li>
   </ul>
   <p>The page was also driven headless, in Chromium on a software GPU, to take the screenshots here. That found two environment problems (recorded in <code>CLAUDE.md</code>) and one real bug (the one in section 8).</p>
@@ -305,6 +305,10 @@ nextInBucket[tid] = atomicExchange(&amp;bucketHeads[bucket], tid + 1u);</code></
   <p>This is the app's design carried over faithfully, and it hasn't been changed here. A real fix would size the neck from the grain size and the duration (flow through an opening follows the Beverloo law, roughly proportional to the opening's width to the power 2.5) and make the wall hold. That needs retuning the parallel collision response, which is a project of its own.</p>
   <h3>A stagger that stopped staggering</h3>
   <p>In the app, a deep-sleeping grain checks for support when <code>counter % 30 == tid % 30</code>. But the counter stops at 60, and 60 % 30 is 0, so once it saturates only grains whose index is a multiple of 30 ever check again. The app's own test passed because it used grain 0. Here the counter cycles from 31 to 60, so every sleeper gets its turn once in 30 steps. The browser test uses grain 7 for that reason.</p>
+
+  <h3>Clumps that held themselves up</h3>
+  <p>After a 20,000-grain run on a phone, a few small clumps of sand were left hanging above the pile. Grains fall asleep while stacked in the pouring column, and then whatever was under them drains away. A deep sleeper checks now and then that it still has support, but "support" meant "touching any grain", and the grains in a clump all touch each other. The same rule gated the snap-to-zero of tiny velocities, so a woken grain that was still touching its neighbours was frozen again before gravity could move it.</p>
+  <p>Support now has to come from underneath: the floor, glass that slopes inwards below the grain, or a grain whose centre is clearly lower. A test builds a sleeping clump in mid-air and checks it ends up on the floor. It failed with both searches before the change, so the app's kernel has the same flaw.</p>
 
   <h2 id="next">12. What wasn't measured, and what to try next</h2>
   <div class="reference">

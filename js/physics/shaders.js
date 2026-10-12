@@ -202,6 +202,25 @@ fn glassRadius(y: f32) -> f32 {
   return mix(profileTable[i0], profileTable[i1], yNorm - f32(i0));
 }
 
+// What counts as something to rest on. Touching another grain is not enough:
+// a clump of grains can touch each other in mid-air. Support has to come from
+// underneath: the floor, glass that slopes inwards below the grain, or a
+// grain whose centre is clearly lower.
+fn onFloor(pos: vec3f, radius: f32) -> bool {
+  return (pos.y - radius) < (u.chamberBottom + radius * 0.1);
+}
+
+fn onGlassSlope(pos: vec3f, radius: f32) -> bool {
+  let here = glassRadius(pos.y);
+  let touching = length(pos.xz) > here - radius * 1.1;
+  return touching && glassRadius(pos.y - radius) < here - radius * 0.05;
+}
+
+// delta = my centre minus the other grain's; dist = its length.
+fn holdsMeUp(delta: vec3f, dist: f32) -> bool {
+  return delta.y > dist * 0.25;
+}
+
 // Deep sleepers cycle 31..60 so that (counter % 30) visits every value once
 // per 30 steps, which is what staggers their support checks.
 fn deeperSleep(counter: f32) -> f32 {
@@ -230,9 +249,11 @@ fn physicsStep(@builtin(global_invocation_id) gid: vec3u) {
     let myTurn = (u32(sleepCounter) % 30u) == (tid % 30u);
     var supported = !myTurn;
     if (myTurn) {
-      supported = (pos.y - radius) < (u.chamberBottom + radius * 0.1);
+      supported = onFloor(pos, radius) || onGlassSlope(pos, radius);
       if (!supported) ${neighbours('pos', /* wgsl */ `
-        if (distance(pos, other.posRadius.xyz) < (radius + other.posRadius.w) * 1.05) {
+        let delta = pos - other.posRadius.xyz;
+        let dist = length(delta);
+        if (dist < (radius + other.posRadius.w) * 1.05 && holdsMeUp(delta, dist)) {
           supported = true;
           stop = true;
         }`)}
@@ -323,12 +344,14 @@ fn physicsStep(@builtin(global_invocation_id) gid: vec3u) {
   //    its own weight and come to rest.
   let inUpperChamber = pos.y > 0.0;
   var contactCount = 0u;
+  var supportCount = 0u;
   ${neighbours('pos', /* wgsl */ `
         let delta = pos - other.posRadius.xyz;
         let dist = length(delta);
         let minDist = radius + other.posRadius.w;
         if (dist < minDist && dist > 0.0001) {
           contactCount++;
+          if (holdsMeUp(delta, dist)) { supportCount++; }
           let normal = delta / dist;
           pos += normal * ((minDist - dist) * 0.25);
           if (!inUpperChamber) {
@@ -360,7 +383,7 @@ fn physicsStep(@builtin(global_invocation_id) gid: vec3u) {
 
   // 8. Snap tiny velocities to zero, but only for a particle that is resting
   //    on something. One in free fall must never be frozen in mid-air.
-  let hasSupport = contactCount > 0u;
+  let hasSupport = supportCount > 0u || onFloor(pos, radius) || onGlassSlope(pos, radius);
   if (!inUpperChamber && hasSupport && length(vel) < 0.01) {
     vel = vec3f(0.0);
   }
