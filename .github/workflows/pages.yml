@@ -38,8 +38,24 @@ jobs:
       - uses: actions/configure-pages@v6
       - name: Assemble static site
         run: |
-          mkdir _site
-          cp -r index.html gpu-tests.html favicon.svg css js docs architecture.html tutorial.html _site/
+          # Code and styles go in a folder named after the commit, and the two
+          # pages are pointed at it. Every deploy therefore has new URLs for
+          # every script and stylesheet, so a browser can never mix files
+          # from two deploys or keep running an old one from its cache. Only
+          # the HTML pages keep their URLs, and a reload refetches those.
+          V="v/${GITHUB_SHA::7}"
+          STAMP="$(TZ=Asia/Singapore date '+%d %b %H:%M') ${GITHUB_SHA::7}"
+          mkdir -p "_site/$V"
+          cp -r index.html gpu-tests.html favicon.svg docs architecture.html tutorial.html _site/
+          cp -r css js "_site/$V/"
+          sed -i "s|href=\"css/style.css\"|href=\"$V/css/style.css\"|; s|src=\"js/main.js\"|src=\"$V/js/main.js\"|" _site/index.html
+          sed -i "s|'./js/dev/gpuSelfTest.js'|'./$V/js/dev/gpuSelfTest.js'|" _site/gpu-tests.html
+          sed -i "s|const BUILD = 'dev';|const BUILD = '$STAMP';|" "_site/$V/js/main.js"
+          # Fail the deploy if any of those rewrites silently missed.
+          grep -q "$V/js/main.js" _site/index.html
+          grep -q "$V/css/style.css" _site/index.html
+          grep -q "$V/js/dev/gpuSelfTest.js" _site/gpu-tests.html
+          grep -q "const BUILD = '$STAMP';" "_site/$V/js/main.js"
       - uses: actions/upload-pages-artifact@v5
         with:
           path: _site

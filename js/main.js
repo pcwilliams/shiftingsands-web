@@ -32,9 +32,10 @@ async function requestDevice() {
   }
 }
 
-// Shown in Stats, so it is obvious which deploy a browser has loaded
-// (GitHub Pages lets browsers cache files for ten minutes). Bump on each push.
-const BUILD = '12 Oct 09:25';
+// Shown in Stats, so it is obvious which deploy a browser has loaded. The
+// deploy workflow replaces 'dev' with the time and commit; this exact line is
+// what it looks for, so keep it as written.
+const BUILD = 'dev';
 
 async function main() {
   const args = parseLaunchArgs(location.search);

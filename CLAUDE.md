@@ -263,9 +263,9 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
   `Controls` applies the boxes' actual state at start-up, because browsers
   can restore a ticked box on reload without firing `change`.
 
-- `BUILD` in `main.js` is printed on the first Stats line. **Bump it on
-  every push**: Pages lets browsers cache for ten minutes and the user
-  has tested a stale copy without knowing.
+- `BUILD` in `main.js` is printed on the first Stats line. It is `'dev'`
+  in the repo; the deploy workflow replaces it with the Singapore time and
+  the short commit (for example `12 Oct 09:40 1a2b3c4`).
 
 ## Timer and control flow
 
@@ -385,10 +385,23 @@ results }` is exposed for devtools and the harness.
 ## Deploy
 
 `.github/workflows/pages.yml` runs `node --test` on every push and PR. On
-`main` it copies `index.html gpu-tests.html favicon.svg css js docs
-architecture.html tutorial.html` into `_site/` and deploys with
-`actions/deploy-pages`. **New top-level files must be added to the `cp`
-line.**
+`main` it assembles `_site/` and deploys with `actions/deploy-pages`.
+
+- `index.html gpu-tests.html favicon.svg docs architecture.html
+  tutorial.html` are copied to the root. **New top-level files must be
+  added to that `cp` line.**
+- **`css/` and `js/` are copied into `v/<short sha>/`**, and `sed`
+  rewrites the stylesheet and script references in `index.html` and the
+  import in `gpu-tests.html` to point there. Pages serves everything
+  with a ten-minute cache and offers no way to change that; the user
+  repeatedly ran a stale or mixed copy on iOS Safari. With a new folder
+  per commit every script and stylesheet has a new URL each deploy, and
+  relative imports keep the whole module graph inside one folder.
+- The same step stamps `BUILD`. Four `grep -q` lines fail the deploy if
+  a rewrite stops matching, so **if you change those three references or
+  the `BUILD` line, change the `sed` patterns with them.**
+- Locally nothing changes: the repo's own `index.html` still points at
+  `js/` and `css/`.
 
 **One-time repo setup:** Settings → Pages → Build and deployment → Source
 → **GitHub Actions**.
