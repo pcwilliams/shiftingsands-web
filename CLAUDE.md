@@ -406,7 +406,7 @@ results }` is exposed for devtools and the harness.
 **One-time repo setup:** Settings → Pages → Build and deployment → Source
 → **GitHub Actions**.
 
-## iPhone 16 Pro: 300 ms physics steps during the pour (addressed, unconfirmed)
+## iPhone 16 Pro: 300 ms physics steps during the pour (fixed, confirmed at 20,000)
 
 At 20,000 grains (Direct, grid) the phone ran physics in about 2 ms and
 drawing in about 7 ms, except for about a second of each run where steps
@@ -414,7 +414,17 @@ took up to 300 ms. The whole-run chart placed it roughly 1 s after the
 flip lands and lasting about 1 s, so it is the pour, not a one-off
 compile stall (`#warmUp` for the snap pipeline was added on that theory
 and is harmless). `BUCKET_WALK_LIMIT` is the response; see the spatial
-hash section. Not yet confirmed on the phone. The "drawing" spikes in the
+hash section. Confirmed on the phone at 20,000 grains (build 6b0b7e9):
+physics peaks at 15 ms, flat through the pour, pile settles clean.
+
+At 100,000 grains on the same phone (same build) it struggles in two
+places: about 40 to 60 ms per step during the flip (every grain awake and
+tumbling) and a peak of 169 ms in the pour, about 3 ms once settled. Not
+worked on. Candidate next steps: a counting-sort grid (cell-contiguous
+particles, coherent memory) instead of hashed linked lists; skipping the
+light-sleep neighbour scan where possible; fewer triangles per grain.
+
+The "drawing" spikes in the
 same window are an artefact: drawing is whole-frame drain time minus a
 physics sample from a different frame, so it swings between 0 and about
 100 ms while the queue is backed up.
