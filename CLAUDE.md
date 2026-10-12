@@ -179,6 +179,19 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
 - Lookup: 27 cells; buckets already walked are skipped (two cells can
   share one), then the list is followed to its end. Strangers from other
   cells that share the bucket are rejected by the distance tests.
+- **The walk along one bucket stops after `BUCKET_WALK_LIMIT` (32)
+  entries.** The phone's whole-run chart showed physics at 2 ms except
+  for about a second starting roughly 1 s after the flip, where steps
+  took up to 300 ms: the pour, when thousands of grains sit in a few neck
+  cells and every grain nearby walks all of them. With the limit, on the
+  software GPU at 10,000 grains, the worst step fell from 580 ms to 370 ms
+  (the remainder is the ordinary cost of an awake lower chamber, about
+  300 ms there), the drain curve is identical, and the pile settles level
+  and fully asleep. A resting pile has at most about ten grains per
+  bucket, so the limit does not touch ordinary piles; keep it well above
+  that. Nothing is removed from the list: every grain still walks for
+  itself, a grain past the limit just isn't seen by neighbours that step.
+  This makes grid and brute force differ inside over-full cells.
 - **Never give buckets a fixed capacity.** The first version had 8 slots.
   This simulation lets grains overlap heavily under compression: measured
   mid-pour, one cell at the neck held 938 of 10,000 grains. Grains past
@@ -376,40 +389,22 @@ line.**
 **One-time repo setup:** Settings → Pages → Build and deployment → Source
 → **GitHub Actions**.
 
-## Open issue: iPhone 16 Pro struggles above about 10,000 grains (Direct, grid)
+## iPhone 16 Pro: 300 ms physics steps during the pour (addressed, unconfirmed)
 
-Reported after the linked-list grid went in; not yet located. Measured
-candidate visits per grain per substep (software GPU, via the CPU
-reference): about 40 at rest and mid-fall; peaks of about 100 at 10,000
-and about 700 at 30,000 while the neck is crowded (one bucket held 1,361
-grains). That is 1 to 2.4% of brute force, so the search does not
-obviously explain it; rendering (80 triangles per grain) and the drop to
-1 substep above 10,000 are the other suspects. Raising the table load
-from 2 to 8 buckets per grain was tried and cut visits only from 40 to
-35, so it was reverted. Reported from the phone at 20,000 grains: physics mostly 3 to 7 ms with a
-momentary 290 ms spike, so the cost is in brief crowded moments, not
-the steady state. The Stats chart shows physics and drawing per frame
-with per-run maxima.
+At 20,000 grains (Direct, grid) the phone ran physics in about 2 ms and
+drawing in about 7 ms, except for about a second of each run where steps
+took up to 300 ms. The whole-run chart placed it roughly 1 s after the
+flip lands and lasting about 1 s, so it is the pour, not a one-off
+compile stall (`#warmUp` for the snap pipeline was added on that theory
+and is harmless). `BUCKET_WALK_LIMIT` is the response; see the spatial
+hash section. Not yet confirmed on the phone. The "drawing" spikes in the
+same window are an artefact: drawing is whole-frame drain time minus a
+physics sample from a different frame, so it swings between 0 and about
+100 ms while the queue is backed up.
 
-Confirmed on the phone with the chart (20,000 grains, Direct, grid):
-physics about 2 ms and drawing about 7 ms in the steady state, with
-maxima of 260 ms and 82 ms; the user reports it is heavy only while the
-sand is in the neck. So the cost is the crowded neck (thousands of
-grains moved onto the axis into a handful of cells, each walking the
-others' lists), not the grid in general.
-
-That explanation is not established. Two experiments on the software GPU
-(10,000 grains): capping contacts per grain at 48, and capping the walk
-of each bucket at 64 or 24. Neither changed the drain curve or the
-settled pile, so such caps are safe; but neither removed the slow period
-either (worst step 580 ms uncapped, 539 with the contact cap, 337 with a
-24-entry walk, against a 130 ms baseline), and the software GPU's 4x
-peak looks nothing like the phone's 150x. A second suspect is a one-off
-main-thread or driver stall when the flip lands: both the physics and
-drawing maxima spike together, and the snap pipeline's first use is at
-exactly that instant. `GpuPhysics.#warmUp` now runs the snap pipeline
-twice at configure time so it is compiled before a run. The whole-run
-chart will show whether the spike sits at the flip tick or in the pour.
+Things tried that did not help: a larger hash table (visits 40 to 35);
+capping contacts per grain at 48 (the cost is grains near a crowded cell
+walking it, not grains in it making contacts).
 
 ## Open issue: blank start in the GPU modes on macOS Safari
 

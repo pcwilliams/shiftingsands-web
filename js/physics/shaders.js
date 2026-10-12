@@ -18,6 +18,7 @@
 // particle finds its neighbours: 'brute' tests every other particle (the
 // app's O(N²) loop) and 'grid' looks in a spatial hash.
 
+import { BUCKET_WALK_LIMIT } from '../models/grid.js';
 import { PROFILE_TABLE_SIZE } from '../models/hourglassProfile.js';
 
 export const WORKGROUP_SIZE = 64;
@@ -150,15 +151,16 @@ function forEachNeighbour(broadphase, centre, body) {
             seen[seenCount] = bucket;
             seenCount++;
 
-            // Walk the bucket's list. A bucket may also hold particles from
-            // some far-off cube with the same hash; the distance tests in the
-            // body reject those. The guard only matters if memory is corrupt.
+            // Walk the bucket's list, but only so far: see BUCKET_WALK_LIMIT
+            // in models/grid.js for why. A bucket may also hold particles
+            // from some far-off cube with the same hash; the distance tests
+            // in the body reject those.
             var link = bucketHeads[bucket];
-            var guard = 0u;
-            while (link != 0u && !stop && guard < u.particleCount) {
+            var walked = 0u;
+            while (link != 0u && !stop && walked < ${BUCKET_WALK_LIMIT}u) {
               let j = link - 1u;
               link = nextInBucket[j];
-              guard++;
+              walked++;
               if (j == tid) { continue; }
               let other = particlesIn[j];
               ${body}

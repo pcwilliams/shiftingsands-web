@@ -28,6 +28,24 @@ export const CELL_SCALE = 1.05;
 /** Buckets per particle, before rounding up to a power of two. */
 export const TABLE_LOAD = 2;
 
+/**
+ * How far the GPU walks along one bucket's list before giving up on it.
+ *
+ * A resting pile puts at most about ten grains in a bucket. But where the
+ * sand is squeezed through the neck this simulation piles hundreds or
+ * thousands of grains into a few cells, and then every grain nearby walks
+ * all of them: on an iPhone one physics step went from 2 ms to 300 ms for
+ * about a second of every run. Measured with the walk limited, the sand
+ * drains at the same rate and settles into the same pile, because in a cell
+ * that crowded the forces are already meaningless. So the walk stops here.
+ * Nothing is lost from the list (every grain still does its own walk); a
+ * grain past the limit just isn't seen by its neighbours that step.
+ *
+ * It must stay well above a resting pile's bucket size, or ordinary piles
+ * start losing neighbours, which is the bug the linked lists replaced.
+ */
+export const BUCKET_WALK_LIMIT = 32;
+
 const ORIGIN = Object.freeze([-0.25, -0.52, -0.25]); // just outside the glass
 
 export function nextPowerOfTwo(n) {
