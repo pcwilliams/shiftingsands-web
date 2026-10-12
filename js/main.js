@@ -12,7 +12,7 @@ import { TimerModel } from './services/timerModel.js';
 import { parseLaunchArgs, applyLaunchArgs } from './services/launchArgs.js';
 import { summarise } from './physics/cpuSimulation.js';
 import { Controls } from './ui/controls.js';
-import { PerfHistory } from './models/perfHistory.js';
+import { RunTimeline } from './models/perfHistory.js';
 import { PerfChart } from './ui/perfChart.js';
 
 /**
@@ -49,7 +49,7 @@ async function main() {
   const timer = new TimerModel(store.duration);
   let built = null;           // the settings the current sand was built with
   let lastResults = null;
-  const perf = new PerfHistory(240);
+  const perf = new RunTimeline();
   const perfChart = new PerfChart(document.getElementById('perf-chart'), document.getElementById('perf-legend'));
   let gpuFrameMs = null;      // physics + drawing, as the GPU queue saw it
   let gpuFramePending = false;
@@ -64,14 +64,15 @@ async function main() {
     built = wanted();
     scene.setParticles({ ...built, broadphase: store.broadphase, seed: args.seed });
     scene.engine?.resetTiming();
-    perf.reset();
+    perf.clear();
   }
 
   function start() {
     // Keep the settled sand where it lies unless a setting changed.
     if (!isCurrent()) rebuild();
-    scene.engine?.resetTiming();   // "max this run" starts with the flip
-    perf.reset();
+    scene.engine?.resetTiming();
+    // The chart's time axis is this run: flip, countdown, a little settling.
+    perf.begin(performance.now() / 1000, PHYSICS.flipDuration, timer.duration);
     timer.startFlip();
     scene.startFlip(() => timer.completeFlip(performance.now() / 1000));
   }
@@ -214,11 +215,12 @@ async function main() {
   // One sample per frame. In the GPU modes the queue runs physics and then
   // the draw, so drawing is the whole frame less the physics.
   function recordPerf() {
+    const now = performance.now() / 1000;
     if (scene.mode === 'cpu') {
-      perf.push(scene.cpuPhysicsMs ?? 0, gpuFrameMs ?? 0);
+      perf.push(now, scene.cpuPhysicsMs ?? 0, gpuFrameMs ?? 0);
     } else {
       const physics = scene.engine.gpuMs ?? 0;
-      perf.push(physics, Math.max((gpuFrameMs ?? physics) - physics, 0));
+      perf.push(now, physics, Math.max((gpuFrameMs ?? physics) - physics, 0));
     }
   }
 

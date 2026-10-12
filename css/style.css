@@ -94,7 +94,7 @@ html, body {
 }
 #stats-panel[hidden] { display: none; }
 #stats { margin: 0; font: inherit; white-space: pre-wrap; }
-#perf-chart { display: block; width: 100%; height: 64px; margin-top: 8px; }
+#perf-chart { display: block; width: 100%; height: 96px; margin-top: 8px; }
 .perf-legend { display: flex; flex-direction: column; margin-top: 4px; }
 .perf-key { display: flex; align-items: center; gap: 6px; color: var(--ink); }
 .perf-key i { width: 10px; height: 2px; border-radius: 1px; flex: none; }

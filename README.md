@@ -1,6 +1,6 @@
 # Shifting Sands (web)
 
-![three.js](https://img.shields.io/badge/three.js-r186%20WebGPU-black) ![WGSL](https://img.shields.io/badge/physics-WGSL%20compute-d9a441) ![No build step](https://img.shields.io/badge/build-none-555) ![Tests](https://img.shields.io/badge/tests-76%20node%20%2B%2020%20GPU-2ea043)
+![three.js](https://img.shields.io/badge/three.js-r186%20WebGPU-black) ![WGSL](https://img.shields.io/badge/physics-WGSL%20compute-d9a441) ![No build step](https://img.shields.io/badge/build-none-555) ![Tests](https://img.shields.io/badge/tests-78%20node%20%2B%2020%20GPU-2ea043)
 
 An hourglass timer for the browser with a real-time granular physics
 simulation. Golden sand grains pour through a glass hourglass built
@@ -37,8 +37,8 @@ it.
 - **Sleep view**: tints the grains the GPU has put to sleep, so you can
   watch the pile settle.
 - **Stats**: frame time, substeps, how much collision searching each
-  frame costs, triangles and GPU memory, plus a live chart of physics
-  and drawing time per frame with the worst of each for the current run.
+  frame costs, triangles and GPU memory, plus a chart of physics
+  and drawing time per frame across the whole run, with the worst of each.
 
 ![On a phone](docs/shiftingsands-web-phone.png)
 
@@ -91,7 +91,7 @@ python3 -m http.server 8000
 node --test
 ```
 
-76 tests cover everything that isn't pixels: the glass profile, spawn
+78 tests cover everything that isn't pixels: the glass profile, spawn
 packing, the CPU physics (ported from the app's `CPUPhysicsTests.swift`),
 the spatial hash, the timer, settings and URL parsing. They need Node 20
 or later and have no dependencies.

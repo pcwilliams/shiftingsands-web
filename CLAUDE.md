@@ -29,7 +29,7 @@ reference, except for the deliberate differences listed below.
   physics share one `GPUDevice`, created in `main.js` and passed to
   `new THREE.WebGPURenderer({ device })`.
 - **Persistence:** `localStorage`, keys prefixed `shiftingsands.`.
-- **Tests:** Node's built-in runner (`node --test`), 76 tests, zero
+- **Tests:** Node's built-in runner (`node --test`), 78 tests, zero
   dependencies; plus 20 in-browser GPU tests (`gpu-tests.html`).
 - **Zero npm dependencies.** `package.json` exists for `"type": "module"`
   and the `npm test` alias.
@@ -79,7 +79,7 @@ shiftingsands-web/
 │   │   ├── packing.js           # radiusForCount, packedParticles, colours, STRIDE
 │   │   ├── physicsConfig.js     # constants, MODE_INFO, substeps, slider mapping
 │   │   ├── grid.js              # spatial hash sizing + CPU reference build
-│   │   └── perfHistory.js       # rolling physics/drawing timings for the Stats chart
+│   │   └── perfHistory.js       # RunTimeline: per-frame timings for one whole run
 │   ├── physics/
 │   │   ├── cpuSimulation.js     # port of GranularSimulation.swift (pure)
 │   │   ├── shaders.js           # WGSL: physicsStep (brute/grid), buildGrid, snapAfterFlip
@@ -234,10 +234,18 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
 - **Physics time (CPU mode):** wall time of `sim.step`.
 - **Drawing time:** `main.js` times the whole frame's GPU work the same
   way and subtracts physics. Not available on the WebGL fallback.
-- `PerfHistory` keeps 240 samples and per-run maxima; `PerfChart` draws
-  both series on one axis with a dashed line at 16.7 ms. Colours are the
-  dataviz skill's validated dark-surface slots 1 and 2 (`#3987e5`
-  drawing, `#d95926` physics); values are in the legend as text.
+- **The chart shows one whole run and does not scroll.** `RunTimeline`
+  (`models/perfHistory.js`) begins at Start with a fixed span of flip +
+  duration + `SETTLE_TAIL` (3 s) and records until the span is used up.
+  `PerfChart` fills it in from the left: 1 px lines, one point per pixel
+  column holding the worst frame in that column (so a single slow frame
+  survives), ticks where the flip lands and where the countdown reaches
+  0:00, a dashed line at 16.7 ms. The value axis is a square root
+  (`sqrtPosition`) so a few-millisecond baseline and a 260 ms spike are
+  both readable; its top is `niceCeiling` of the run's maximum. A rebuild
+  clears it. Colours are the dataviz skill's validated dark-surface slots
+  1 and 2 (`#3987e5` drawing, `#d95926` physics); values are in the
+  legend as text.
 - The Stats, Sleep view and Colours boxes have `autocomplete="off"`, and
   `Controls` applies the boxes' actual state at start-up, because browsers
   can restore a ticked box on reload without firing `change`.
@@ -303,7 +311,7 @@ frame. Two-phase start: `startFlip()` → scene flip (1.2 s, smoothstep) →
 
 ## Tests
 
-Node (76): `perfHistory` (6), `geometry` (10), `packing` (10), `cpuPhysics` (11, including
+Node (78): `perfHistory` (8), `geometry` (10), `packing` (10), `cpuPhysics` (11, including
 ports of the app's CPU tests), `grid` (8), `config` (10), `timer` (8),
 `settings` (13).
 
@@ -379,11 +387,13 @@ momentary 290 ms spike, so the cost is in brief crowded moments, not
 the steady state. The Stats chart shows physics and drawing per frame
 with per-run maxima.
 
-Also open: after a 20,000-grain run on the phone a few small clumps of
-grains were left asleep in mid-air above the pile. Not yet investigated.
-Hypothesis: the lower-chamber velocity cutoff and sleep count any
-touching grain as support, so a clump that comes to rest together in
-mid-air holds itself up; support should mean a grain underneath.
+Confirmed on the phone with the chart (20,000 grains, Direct, grid):
+physics about 2 ms and drawing about 7 ms in the steady state, with
+maxima of 260 ms and 82 ms; the user reports it is heavy only while the
+sand is in the neck. So the cost is the crowded neck (thousands of
+grains moved onto the axis into a handful of cells, each walking the
+others' lists), not the grid in general. Nothing has been changed for
+this yet.
 
 ## Open issue: blank start in the GPU modes on macOS Safari
 
