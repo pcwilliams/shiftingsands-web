@@ -73,6 +73,10 @@ export class GpuPhysics {
     this.current = 0;            // which of the two particle buffers is "now"
     this.readPending = false;
     this.frame = 0;
+    this.timing = false;
+    this.timingEpoch = 0;
+    this.gpuMs = null;
+    this.gpuMsMax = 0;
     this.uniformData = new ArrayBuffer(UNIFORM_BYTES);
     this.uniformF32 = new Float32Array(this.uniformData);
     this.uniformU32 = new Uint32Array(this.uniformData);
@@ -251,18 +255,30 @@ export class GpuPhysics {
     this.#sampleGpuTime();
   }
 
-  // A rough clock for the stats readout. Every 30th frame, time how long the
-  // GPU takes to finish everything queued up to and including this physics
-  // step. When the GPU is keeping up that is close to the cost of the step;
-  // when it isn't, it is the backlog, which is the thing worth seeing.
+  // A rough clock for the stats readout: how long the GPU takes to finish
+  // everything queued up to and including this physics step. When the GPU is
+  // keeping up that is close to the cost of the step; when it isn't, it is
+  // the backlog. A new measurement starts as soon as the last one lands, so
+  // on a GPU that keeps up every frame is timed and a one-frame spike is
+  // caught. gpuMsMax is the worst seen since resetTiming().
   #sampleGpuTime() {
-    if (this.frame % 30 !== 0 || this.timing) return;
+    if (this.timing) return;
     this.timing = true;
     const started = performance.now();
+    const epoch = this.timingEpoch;
     this.device.queue.onSubmittedWorkDone().then(() => {
-      this.gpuMs = performance.now() - started;
       this.timing = false;
+      if (epoch !== this.timingEpoch) return;   // reset while in flight
+      this.gpuMs = performance.now() - started;
+      this.gpuMsMax = Math.max(this.gpuMsMax, this.gpuMs);
     }, () => { this.timing = false; });
+  }
+
+  /** Start a fresh "max this run". */
+  resetTiming() {
+    this.timingEpoch++;
+    this.gpuMs = null;
+    this.gpuMsMax = 0;
   }
 
   #encodeCopy(encoder, target) {

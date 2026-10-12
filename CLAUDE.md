@@ -29,7 +29,7 @@ reference, except for the deliberate differences listed below.
   physics share one `GPUDevice`, created in `main.js` and passed to
   `new THREE.WebGPURenderer({ device })`.
 - **Persistence:** `localStorage`, keys prefixed `shiftingsands.`.
-- **Tests:** Node's built-in runner (`node --test`), 70 tests, zero
+- **Tests:** Node's built-in runner (`node --test`), 76 tests, zero
   dependencies; plus 18 in-browser GPU tests (`gpu-tests.html`).
 - **Zero npm dependencies.** `package.json` exists for `"type": "module"`
   and the `npm test` alias.
@@ -78,7 +78,8 @@ shiftingsands-web/
 │   │   ├── hourglassProfile.js  # port of SandGeometry.swift
 │   │   ├── packing.js           # radiusForCount, packedParticles, colours, STRIDE
 │   │   ├── physicsConfig.js     # constants, MODE_INFO, substeps, slider mapping
-│   │   └── grid.js              # spatial hash sizing + CPU reference build
+│   │   ├── grid.js              # spatial hash sizing + CPU reference build
+│   │   └── perfHistory.js       # rolling physics/drawing timings for the Stats chart
 │   ├── physics/
 │   │   ├── cpuSimulation.js     # port of GranularSimulation.swift (pure)
 │   │   ├── shaders.js           # WGSL: physicsStep (brute/grid), buildGrid, snapAfterFlip
@@ -89,6 +90,7 @@ shiftingsands-web/
 │   │   ├── timerModel.js        # idle → flipping → running → complete
 │   │   └── launchArgs.js        # URL parameter parsing
 │   ├── ui/controls.js           # DOM ↔ store/timer
+│   ├── ui/perfChart.js          # canvas chart at the bottom of Stats
 │   └── dev/gpuSelfTest.js       # ports of GPUPhysicsTests.swift
 ├── tests/                     # node:test, *.test.js
 ├── docs/                      # screenshots for README / HTML docs / og:image
@@ -220,6 +222,26 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
 - **Sleep view:** a TSL uniform mixes a blue tint into grains whose sleep
   counter is above 15 (light) or 30 (deep).
 
+## Stats panel and timing chart
+
+`#stats-panel` holds the text readout, a canvas chart and its legend.
+
+- **Physics time (GPU modes):** `GpuPhysics.#sampleGpuTime` times from the
+  physics submit to `queue.onSubmittedWorkDone()`. A new sample starts as
+  soon as the last lands, so every frame is timed when the GPU keeps up.
+  `gpuMsMax` is the worst since `resetTiming()` (called on start and on
+  rebuild). It is queue-drain time, so under backlog it reads the backlog.
+- **Physics time (CPU mode):** wall time of `sim.step`.
+- **Drawing time:** `main.js` times the whole frame's GPU work the same
+  way and subtracts physics. Not available on the WebGL fallback.
+- `PerfHistory` keeps 240 samples and per-run maxima; `PerfChart` draws
+  both series on one axis with a dashed line at 16.7 ms. Colours are the
+  dataviz skill's validated dark-surface slots 1 and 2 (`#3987e5`
+  drawing, `#d95926` physics); values are in the legend as text.
+- The Stats, Sleep view and Colours boxes have `autocomplete="off"`, and
+  `Controls` applies the boxes' actual state at start-up, because browsers
+  can restore a ticked box on reload without firing `change`.
+
 ## Timer and control flow
 
 `TimerModel` has no timer of its own; `main.js` calls `tick(now)` every
@@ -271,7 +293,7 @@ frame. Two-phase start: `startFlip()` → scene flip (1.2 s, smoothstep) →
 
 ## Tests
 
-Node (70): `geometry` (10), `packing` (10), `cpuPhysics` (11, including
+Node (76): `perfHistory` (6), `geometry` (10), `packing` (10), `cpuPhysics` (11, including
 ports of the app's CPU tests), `grid` (8), `config` (10), `timer` (8),
 `settings` (13).
 
@@ -341,9 +363,16 @@ grains). That is 1 to 2.4% of brute force, so the search does not
 obviously explain it; rendering (80 triangles per grain) and the drop to
 1 substep above 10,000 are the other suspects. Raising the table load
 from 2 to 8 buckets per grain was tried and cut visits only from 40 to
-35, so it was reverted. Stats now shows "physics on GPU about N ms"
-(time for the queue to drain after the physics submit, sampled every 30
-frames) to separate physics from drawing on the device.
+35, so it was reverted. Reported from the phone at 20,000 grains: physics mostly 3 to 7 ms with a
+momentary 290 ms spike, so the cost is in brief crowded moments, not
+the steady state. The Stats chart shows physics and drawing per frame
+with per-run maxima.
+
+Also open: after a 20,000-grain run on the phone a few small clumps of
+grains were left asleep in mid-air above the pile. Not yet investigated.
+Hypothesis: the lower-chamber velocity cutoff and sleep count any
+touching grain as support, so a clump that comes to rest together in
+mid-air holds itself up; support should mean a grain underneath.
 
 ## Open issue: blank start in the GPU modes on macOS Safari
 

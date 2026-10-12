@@ -331,7 +331,9 @@ export class HourglassScene {
       sim.gravity = gravity;
       sim.neckDamping = neckDamping;
       sim.containerEulerX = angle;
+      const started = performance.now();
       sim.step(dt);
+      this.cpuPhysicsMs = performance.now() - started;
       this.instances.needsUpdate = true;          // upload the array
       return;
     }

@@ -80,17 +80,25 @@ html, body {
 .toggle input:checked { background: color-mix(in srgb, var(--sand) 75%, transparent); }
 .toggle input:checked::after { transform: translateX(14px); }
 
-#stats {
+#stats-panel {
   margin: 4px 0 0;
   padding: 8px 10px;
   border-radius: 8px;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.6);
   color: var(--ink-soft);
   font: 11px/1.5 var(--mono);
   font-variant-numeric: tabular-nums;
-  white-space: pre;
   pointer-events: none;
+  width: 264px;
+  max-width: calc(100vw - 32px);
 }
+#stats-panel[hidden] { display: none; }
+#stats { margin: 0; font: inherit; white-space: pre-wrap; }
+#perf-chart { display: block; width: 100%; height: 64px; margin-top: 8px; }
+.perf-legend { display: flex; flex-direction: column; margin-top: 4px; }
+.perf-key { display: flex; align-items: center; gap: 6px; color: var(--ink); }
+.perf-key i { width: 10px; height: 2px; border-radius: 1px; flex: none; }
+.perf-max { margin-left: auto; color: var(--ink-soft); }
 
 .segmented {
   display: flex;
@@ -199,6 +207,9 @@ html, body {
   .segmented.small { width: 112px; }
   .slider input { width: 136px; }
   .readout { font-size: 40px; }
+  /* The top-right controls are taller than the toggles: start the stats
+     panel below them so the sliders stay usable. */
+  #stats-panel { margin-top: 84px; }
 }
 
 @media (max-height: 520px) {

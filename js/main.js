@@ -12,6 +12,8 @@ import { TimerModel } from './services/timerModel.js';
 import { parseLaunchArgs, applyLaunchArgs } from './services/launchArgs.js';
 import { summarise } from './physics/cpuSimulation.js';
 import { Controls } from './ui/controls.js';
+import { PerfHistory } from './models/perfHistory.js';
+import { PerfChart } from './ui/perfChart.js';
 
 /**
  * Ask for a GPU device. WebGPU hands out access in two steps: an adapter
@@ -47,6 +49,10 @@ async function main() {
   const timer = new TimerModel(store.duration);
   let built = null;           // the settings the current sand was built with
   let lastResults = null;
+  const perf = new PerfHistory(240);
+  const perfChart = new PerfChart(document.getElementById('perf-chart'), document.getElementById('perf-legend'));
+  let gpuFrameMs = null;      // physics + drawing, as the GPU queue saw it
+  let gpuFramePending = false;
   let lastGpuError = '';
 
   const wanted = () => ({
@@ -57,11 +63,15 @@ async function main() {
   function rebuild() {
     built = wanted();
     scene.setParticles({ ...built, broadphase: store.broadphase, seed: args.seed });
+    scene.engine?.resetTiming();
+    perf.reset();
   }
 
   function start() {
     // Keep the settled sand where it lies unless a setting changed.
     if (!isCurrent()) rebuild();
+    scene.engine?.resetTiming();   // "max this run" starts with the flip
+    perf.reset();
     timer.startFlip();
     scene.startFlip(() => timer.completeFlip(performance.now() / 1000));
   }
@@ -168,15 +178,48 @@ async function main() {
     // huge physics step, or grains would tunnel through each other.
     const dt = Math.min(rawDt, PHYSICS.maxDt);
 
+    const beforeFrame = performance.now();
     scene.update(dt, {
       gravity: gravityScale(timer.duration),
       neckDamping: neckDamping(timer.duration),
     });
     timer.tick(nowMs / 1000);
+    const beforeDraw = performance.now();
     scene.render();
+    timeFrameOnGpu(scene.mode === 'cpu' ? beforeDraw : beforeFrame);
+    recordPerf();
 
     smoothedMs += (rawDt * 1000 - smoothedMs) * 0.05;
     if (++frames % 20 === 0) controls.setStats(statsText());
+    if (controls.statsVisible && frames % 4 === 0) {
+      perfChart.draw(perf, {
+        physicsLabel: scene.mode === 'cpu' ? 'physics (CPU)' : 'physics (GPU)',
+        hasDrawing: Boolean(device),
+      });
+    }
+  }
+
+  // How long the GPU took over this frame's work: from when it was queued to
+  // when the queue reports it done. A new measurement starts as soon as the
+  // last one lands, so when the GPU keeps up every frame is timed.
+  function timeFrameOnGpu(queuedAt) {
+    if (!device || gpuFramePending) return;
+    gpuFramePending = true;
+    device.queue.onSubmittedWorkDone().then(() => {
+      gpuFrameMs = performance.now() - queuedAt;
+      gpuFramePending = false;
+    }, () => { gpuFramePending = false; });
+  }
+
+  // One sample per frame. In the GPU modes the queue runs physics and then
+  // the draw, so drawing is the whole frame less the physics.
+  function recordPerf() {
+    if (scene.mode === 'cpu') {
+      perf.push(scene.cpuPhysicsMs ?? 0, gpuFrameMs ?? 0);
+    } else {
+      const physics = scene.engine.gpuMs ?? 0;
+      perf.push(physics, Math.max((gpuFrameMs ?? physics) - physics, 0));
+    }
   }
 
   function statsText() {
@@ -191,7 +234,6 @@ async function main() {
     ];
     if (mode !== 'cpu') {
       lines.push(`${(scene.engine.memoryBytes / 1048576).toFixed(1)} MB of GPU buffers`);
-      if (scene.engine.gpuMs != null) lines.push(`physics on GPU about ${scene.engine.gpuMs.toFixed(1)} ms`);
     }
     // Plumbing, for diagnosing a blank picture.
     const backend = scene.renderer.backend?.isWebGPUBackend ? 'WebGPU' : 'WebGL 2';

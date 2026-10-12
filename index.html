@@ -32,10 +32,14 @@
   <canvas id="scene" role="img" aria-label="A glass hourglass filled with golden sand"></canvas>
 
   <div class="hud top-left">
-    <label class="toggle"><input type="checkbox" id="colors"><span>Colours</span></label>
-    <label class="toggle" id="sleep-view-row"><input type="checkbox" id="sleep-view"><span>Sleep view</span></label>
-    <label class="toggle"><input type="checkbox" id="stats-toggle"><span>Stats</span></label>
-    <pre id="stats" hidden></pre>
+    <label class="toggle"><input type="checkbox" id="colors" autocomplete="off"><span>Colours</span></label>
+    <label class="toggle" id="sleep-view-row"><input type="checkbox" id="sleep-view" autocomplete="off"><span>Sleep view</span></label>
+    <label class="toggle"><input type="checkbox" id="stats-toggle" autocomplete="off"><span>Stats</span></label>
+    <div id="stats-panel" hidden>
+      <pre id="stats"></pre>
+      <canvas id="perf-chart" role="img" aria-label="Physics and drawing time per frame over the last few seconds"></canvas>
+      <div id="perf-legend" class="perf-legend"></div>
+    </div>
   </div>
 
   <div class="hud top-right">

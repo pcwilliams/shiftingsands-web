@@ -290,7 +290,7 @@ nextInBucket[tid] = atomicExchange(&amp;bucketHeads[bucket], tid + 1u);</code></
   <h2 id="testing">10. Testing a GPU program</h2>
   <p>There are three layers.</p>
   <ul>
-    <li><strong>Node, 70 tests.</strong> The glass, the packing, the CPU physics (including the app's ten CPU tests), the timer, settings and URL parsing. Also <code>models/grid.js</code>, a plain JavaScript version of the spatial hash. One test builds a jittered pile of 3,000 grains and checks that the hash finds every true contact with no duplicates.</li>
+    <li><strong>Node, 76 tests.</strong> The glass, the packing, the CPU physics (including the app's ten CPU tests), the timer, settings and URL parsing. Also <code>models/grid.js</code>, a plain JavaScript version of the spatial hash. One test builds a jittered pile of 3,000 grains and checks that the hash finds every true contact with no duplicates.</li>
     <li><strong>The browser, 18 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search.</li>
     <li><strong>Cross-checking.</strong> The most useful single test: start both searches from the same moving state, step each, read both back, and compare. The largest difference was a few millionths of a unit (1 to 3 × 10⁻⁶ across runs), which is floating-point summation order. That test alone was not enough, as section 9 admits: it used a loose pile. A second test packs 31 grains into one bucket and checks the two searches still agree exactly.</li>
   </ul>

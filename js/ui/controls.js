@@ -99,6 +99,11 @@ export class Controls {
       actions.startOrReset();
     });
 
+    // A browser may restore these boxes as ticked after a reload without
+    // firing a change event. Start from what the boxes actually say.
+    this.showStats($('stats-toggle').checked);
+    actions.sleepView($('sleep-view').checked);
+
     store.subscribe(() => this.syncSettings());
     timer.subscribe(() => this.syncTimer());
     this.syncSettings();
@@ -136,7 +141,7 @@ export class Controls {
 
   showStats(on) {
     $('stats-toggle').checked = on;
-    $('stats').hidden = !on;
+    $('stats-panel').hidden = !on;
     this.statsVisible = on;
     if (on) this.onStatsShown?.();
   }
