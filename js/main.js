@@ -32,6 +32,10 @@ async function requestDevice() {
   }
 }
 
+// Shown in Stats, so it is obvious which deploy a browser has loaded
+// (GitHub Pages lets browsers cache files for ten minutes). Bump on each push.
+const BUILD = '12 Oct 08:55';
+
 async function main() {
   const args = parseLaunchArgs(location.search);
   const store = new SettingsStore();
@@ -229,7 +233,7 @@ async function main() {
     const substeps = mode === 'cpu' ? cpuSubsteps(scene.count) : gpuSubsteps(scene.count);
     const work = searchWorkPerFrame(mode, scene.count, store.broadphase);
     const lines = [
-      `${(1000 / smoothedMs).toFixed(0)} fps  ${smoothedMs.toFixed(1)} ms`,
+      `${(1000 / smoothedMs).toFixed(0)} fps  ${smoothedMs.toFixed(1)} ms  build ${BUILD}`,
       `${MODE_INFO[mode].label}  ${formatCount(scene.count)} grains  r ${scene.particleRadius.toFixed(4)}`,
       `${substeps} substep${substeps > 1 ? 's' : ''}  ${work.value.toExponential(1)} ${work.unit}/frame`,
       `${(scene.triangles / 1e6).toFixed(2)}M triangles`,

@@ -250,6 +250,10 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
   `Controls` applies the boxes' actual state at start-up, because browsers
   can restore a ticked box on reload without firing `change`.
 
+- `BUILD` in `main.js` is printed on the first Stats line. **Bump it on
+  every push**: Pages lets browsers cache for ten minutes and the user
+  has tested a stale copy without knowing.
+
 ## Timer and control flow
 
 `TimerModel` has no timer of its own; `main.js` calls `tick(now)` every
@@ -392,8 +396,20 @@ physics about 2 ms and drawing about 7 ms in the steady state, with
 maxima of 260 ms and 82 ms; the user reports it is heavy only while the
 sand is in the neck. So the cost is the crowded neck (thousands of
 grains moved onto the axis into a handful of cells, each walking the
-others' lists), not the grid in general. Nothing has been changed for
-this yet.
+others' lists), not the grid in general.
+
+That explanation is not established. Two experiments on the software GPU
+(10,000 grains): capping contacts per grain at 48, and capping the walk
+of each bucket at 64 or 24. Neither changed the drain curve or the
+settled pile, so such caps are safe; but neither removed the slow period
+either (worst step 580 ms uncapped, 539 with the contact cap, 337 with a
+24-entry walk, against a 130 ms baseline), and the software GPU's 4x
+peak looks nothing like the phone's 150x. A second suspect is a one-off
+main-thread or driver stall when the flip lands: both the physics and
+drawing maxima spike together, and the snap pipeline's first use is at
+exactly that instant. `GpuPhysics.#warmUp` now runs the snap pipeline
+twice at configure time so it is compiled before a run. The whole-run
+chart will show whether the spike sits at the flip tick or in the pour.
 
 ## Open issue: blank start in the GPU modes on macOS Safari
 

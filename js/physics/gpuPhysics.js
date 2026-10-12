@@ -150,6 +150,7 @@ export class GpuPhysics {
     device.queue.writeBuffer(buffers.profile, 0, profile.buildLookupTable());
 
     this.#buildBindGroups();
+    this.#warmUp();
   }
 
   // A bind group fills in a pipeline's @binding slots. The read and write
@@ -184,6 +185,25 @@ export class GpuPhysics {
     for (const buffer of this.buffers.particles) {
       this.device.queue.writeBuffer(buffer, 0, particles, 0, this.count * STRIDE);
     }
+  }
+
+  // A GPU driver may not finish compiling a pipeline until it is first used,
+  // and that first use then stalls for a noticeable fraction of a second.
+  // The flip pipeline is first needed at the instant the flip lands, the
+  // worst moment for a hitch, so run it now instead. Twice puts every grain
+  // back where it was: (x, -y, -z) and back again.
+  #warmUp() {
+    if (this.count === 0) return;
+    this.#writeUniforms(0);
+    const encoder = this.device.createCommandEncoder({ label: 'warm-up' });
+    for (let i = 0; i < 2; i++) {
+      const pass = encoder.beginComputePass({ label: 'warm-snap' });
+      pass.setPipeline(this.pipelines.snap);
+      pass.setBindGroup(0, this.bindGroups.snap[this.current]);
+      pass.dispatchWorkgroups(Math.ceil(this.count / WORKGROUP_SIZE));
+      pass.end();
+    }
+    this.device.queue.submit([encoder.finish()]);
   }
 
   setBroadphase(broadphase) {
