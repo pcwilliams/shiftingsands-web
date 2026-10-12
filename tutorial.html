@@ -71,9 +71,10 @@ a { color: var(--accent); }
     <li><a href="#parallel">Why parallel physics is harder</a></li>
     <li><a href="#readback">Readback, and avoiding it</a></li>
     <li><a href="#grid">Getting rid of N²: a spatial hash</a></li>
+    <li><a href="#sorted">The same grid, sorted: a counting sort</a></li>
     <li><a href="#testing">Testing a GPU program</a></li>
     <li><a href="#found">Things found along the way</a></li>
-    <li><a href="#next">What wasn't measured, and what to try next</a></li>
+    <li><a href="#next">What was measured, and what to try next</a></li>
   </ol>
 
   <h2 id="pitch">1. The pitch and four questions</h2>
@@ -284,19 +285,61 @@ nextInBucket[tid] = atomicExchange(&amp;bucketHeads[bucket], tid + 1u);</code></
     <span class="who">And the second version leaned</span>
     With that fixed, 10,000 grains drained and then came to rest as a tower leaning on one side of the glass. The collision loop moves a grain as it goes, so the order in which it meets its neighbours nudges the answer slightly. All-pairs meets them in index order, which is spatially arbitrary, so the nudges average out. The grid met them in sweep order: every grain saw its −x neighbours first, every grain got the same nudge, and the pile crept sideways, 14 grain radii off-centre. The first fix reversed the sweep for odd-numbered grains. That centred the pile on average but left a heap on one side: two fixed patterns are still patterns. Now each grain's sweep direction on each axis, and which axis is outermost, come from a hash of its index and the frame number, so no grain keeps the same bias from one frame to the next. Measured after settling, the surface is level to within half a grain radius round the pile, the same as N². A test checks the settled pile is level and centred, for both searches.
   </div>
-  <h3>One kernel, two searches</h3>
-  <p>The kernel's three neighbour loops (collision, light-sleep wake, deep-sleep support) are generated from one JavaScript template, <code>forEachNeighbour(broadphase, centre, body)</code>. It emits either the all-pairs loop or the 27-cube loop around the same body. Everything else in the kernel is shared, and both variants use the same substep table. So the <strong>Grid / N²</strong> switch changes how neighbours are found and nothing else, and you can flip it mid-run with the Stats readout open.</p>
+  <h3>One kernel, three searches</h3>
+  <p>The kernel's three neighbour loops (collision, light-sleep wake, deep-sleep support) are generated from one JavaScript template, <code>forEachNeighbour(broadphase, centre, body)</code>. It emits the all-pairs loop, or the 27-cube loop with one of two ways of reading a bucket (section 10), around the same body. Everything else in the kernel is shared, and every variant uses the same substep table. So the <strong>Grid / Sorted / N²</strong> switch changes how neighbours are found and nothing else, and you can flip it mid-run with the Stats readout open.</p>
 
-  <h2 id="testing">10. Testing a GPU program</h2>
+  <h2 id="sorted">10. The same grid, sorted: a counting sort</h2>
+  <p>The linked lists work, and on an iPhone they hold 20,000 grains at a 15 ms worst step. At 100,000 the phone struggles: 40 to 60 ms a step while the whole pile tumbles in the flip, and a 169 ms peak in the pour. Look at what one neighbour lookup does with a list:</p>
+  <pre><code>var link = bucketHeads[bucket];
+while (link != 0u) {
+  let j = link - 1u;
+  link = nextInBucket[j];      // can't start until the last load finished
+  let other = particlesIn[j];  // anywhere in a 6 MB buffer
+  ...
+}</code></pre>
+  <p>Every step of the walk waits for the one before it: a pointer chase, the GPU version of iterating a <code>std::list</code>. And the grains in one bucket were added in whatever order their threads ran, so they are scattered through memory. A GPU hides memory latency by switching to other threads while it waits. It can't hide a chain of dependent loads into memory it has no reason to have cached.</p>
+  <p>The standard answer is to sort. Same cubes, same hash, same table, but every substep copy the grains into one array in bucket order. Then a bucket is a range, <code>[start, start + count)</code>, and its grains sit side by side.</p>
+  <h3>Sorting in four dispatches</h3>
+  <p>A general sort is expensive. This one isn't, because the keys are small integers (bucket numbers) and we only need grains with the same key together. That is a counting sort, and every step of it runs in parallel:</p>
+  <ol>
+    <li><strong>Count.</strong> Each grain does <code>rank = atomicAdd(&amp;bucketCounts[bucket], 1u)</code>. The value that comes back is the count before its +1, so it doubles as the grain's position within its bucket: 0, 1, 2 and so on, in whatever order the threads arrive.</li>
+    <li><strong>Scan.</strong> A bucket starts where all the buckets before it end, so the starts are the running totals of the counts: <code>std::exclusive_scan</code>.</li>
+    <li><strong>Scatter.</strong> Each grain copies itself to <code>start[bucket] + rank</code>. The ranks make every slot unique, so there are no atomics in this step.</li>
+  </ol>
+  <p>The scan is the interesting part, because a running total looks inherently serial. The trick (Hillis and Steele) works in rounds within one workgroup. In round <em>k</em> every thread adds the value 2<sup>k</sup> places to its left, so after log₂(n) rounds each holds the total of everything up to itself:</p>
+  <pre><code>var&lt;workgroup&gt; tile: array&lt;u32, 256&gt;;   // shared by the workgroup's 256 threads
+
+tile[lane] = value;
+workgroupBarrier();
+for (var offset = 1u; offset &lt; 256u; offset *= 2u) {
+  var add = 0u;
+  if (lane &gt;= offset) { add = tile[lane - offset]; }
+  workgroupBarrier();                    // everyone reads before anyone writes
+  tile[lane] += add;
+  workgroupBarrier();
+}</code></pre>
+  <p><code>var&lt;workgroup&gt;</code> is Metal's <code>threadgroup</code> memory: fast, on-chip, shared by one workgroup only. A workgroup can't see past its own block, so the table is scanned in two passes. The first scans each block of 1,024 buckets (256 threads, each loading four counters as one <code>vec4u</code>) and writes each block's total. The second, a single workgroup, scans those totals. A bucket's start is its offset within its block plus its block's start. At 200,000 grains that is 524,288 buckets in 512 blocks.</p>
+  <h3>Keeping each grain's identity</h3>
+  <p>Many GPU particle systems sort the particle data itself and leave it sorted. That would break things here, because a grain's index means something: it picks the grain's colour in the vertex buffer, its turn in the deep-sleep stagger (<code>tid % 30</code>), its sweep order, and which grain the tests follow. So the particle buffers are never reordered. The sorted array is a copy made fresh every substep, a second array records which grain each slot came from, and results go back to the grain's own slot.</p>
+  <p>The sort is used twice. Neighbours are read from the sorted copy, side by side. And the physics threads themselves run in sorted order: thread <em>k</em> handles the grain in slot <em>k</em>. So the 64 threads in a workgroup are 64 grains from the same few cubes, reading the same few ranges, which is exactly what a GPU cache rewards.</p>
+  <pre><code>let tid = sortedIds[gid.x];   // my grain, in sorted order; everything after uses tid</code></pre>
+  <h3>Crowded cells, sampled evenly</h3>
+  <p>A range also changes what the walk limit can do. A list can only be cut short: the first 32 grains, whichever they happen to be. A range can be sampled. When a bucket holds more than 32 grains, a grain visits 32 slots spread evenly along it from a random start, so it hears from the whole crowd, not one end of it. When the bucket fits, it visits every slot, still from a random start, so the within-cell order is scrambled like the sweep order is. (The spreading takes two integer divisions per visit, which GPUs do in software, so only crowded buckets pay for it.)</p>
+  <div class="reference">
+    <span class="who">What it costs, and what isn't known yet</span>
+    Four dispatches and a buffer clear per substep instead of two, and about 12 MB more at 200,000 grains. On the software GPU used for the tests, the sort's own passes are the expensive part, because it emulates <code>workgroupBarrier</code> on a CPU. The first version, 256 buckets per workgroup, spent 40 ms a step in the scan at 10,000 grains. With 1,024 per workgroup it spends 10 ms. A real GPU should scan half a million counters in well under a millisecond, but that hasn't been measured. The neighbour search itself came out about even with the lists there. A software GPU says nothing about caches or latency hiding on a phone, which is the whole point of sorting. The drain curve, the settled pile (level to 0.4 radii) and the sleep counts match the list grid exactly. Whether Sorted is faster is a question for your phone's chart.
+  </div>
+
+  <h2 id="testing">11. Testing a GPU program</h2>
   <p>There are three layers.</p>
   <ul>
-    <li><strong>Node, 78 tests.</strong> The glass, the packing, the CPU physics (including the app's ten CPU tests), the timer, settings and URL parsing. Also <code>models/grid.js</code>, a plain JavaScript version of the spatial hash. One test builds a jittered pile of 3,000 grains and checks that the hash finds every true contact with no duplicates.</li>
-    <li><strong>The browser, 22 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search.</li>
-    <li><strong>Cross-checking.</strong> The most useful single test: start both searches from the same moving state, step each, read both back, and compare. The largest difference was a few millionths of a unit (1 to 3 × 10⁻⁶ across runs), which is floating-point summation order. That test alone was not enough, as section 9 admits: it used a loose pile. A second test packs 31 grains into one bucket and checks the two searches still agree exactly.</li>
+    <li><strong>Node, 81 tests.</strong> The glass, the packing, the CPU physics (including the app's ten CPU tests), the timer, settings and URL parsing. Also <code>models/grid.js</code>, a plain JavaScript version of both grids. One test builds a jittered pile of 3,000 grains and checks that the hash finds every true contact with no duplicates; another that the sorted layout puts every grain in its bucket's range once and finds exactly the same candidates as the lists; another that the crowded-bucket sampling never visits a slot twice and spreads its visits evenly.</li>
+    <li><strong>The browser, 33 tests.</strong> Node can't run WebGPU, so <a href="gpu-tests.html"><code>gpu-tests.html</code></a> runs ports of the app's GPU tests on your own GPU, once per neighbour search. One more reads the sort's buffers back at 140,000 grains and checks them: every grain once, each bucket starting where the last ended across all 512 scan blocks, every grain in its own bucket's range.</li>
+    <li><strong>Cross-checking.</strong> The most useful single test: start all three searches from the same moving state, step each, read them back, and compare. The largest difference was a few millionths of a unit (1 to 3 × 10⁻⁶ across runs), which is floating-point summation order. That test alone was not enough, as section 9 admits: it used a loose pile. A second test packs 31 grains into one bucket and checks the searches still agree exactly.</li>
   </ul>
-  <p>The page was also driven headless, in Chromium on a software GPU, to take the screenshots here. That found two environment problems (recorded in <code>CLAUDE.md</code>) and one real bug (the one in section 8).</p>
+  <p>The page was also driven headless, in Chromium on a software GPU, to take the screenshots here. That found two environment problems (recorded in <code>CLAUDE.md</code>) and one real bug (the one in section 8). It is no use for judging speed, as the next sections show.</p>
 
-  <h2 id="found">11. Things found along the way</h2>
+  <h2 id="found">12. Things found along the way</h2>
   <h3>The neck pinches shut</h3>
   <p>A test asserting "the neck is the narrowest point" failed. Catmull-Rom splines overshoot where a curve turns sharply, so the glass is narrowest just beside the neck, not at it, and at high counts the inner radius there reaches zero. On top of that, the neck is sized as the grain radius plus 0.002, while the wall test subtracts a clearance of 0.003. The usable radius at the neck is therefore negative for every count.</p>
   <p>Both engines have a branch for "narrower than the particle": move the grain onto the axis. So grains don't queue at the neck. They are placed on the axis, overlapping, and fall through together. In CPU mode the sphere collision that runs afterwards can push a few of them sideways out through the glass for a frame.</p>
@@ -315,21 +358,26 @@ nextInBucket[tid] = atomicExchange(&amp;bucketHeads[bucket], tid + 1u);</code></
   <p>Support now has to come from underneath: the floor, glass that slopes inwards below the grain, or a grain whose centre is clearly lower. A test builds a sleeping clump in mid-air and checks it ends up on the floor. It failed with both searches before the change, so the app's kernel has the same flaw.</p>
   <p>The first version of that rule had a flaw of its own. It counted any glass that leans inwards below the grain, and the side of the lower bulb leans in slightly below its widest point. Grains thrown against it stuck there and went to sleep on the wall, which from the front looks exactly like a clump hanging in mid-air. Only the steep rim by the floor counts now, and a second test puts a grain on the side wall and checks it falls.</p>
 
-  <h2 id="next">12. What wasn't measured, and what to try next</h2>
+  <h3>A phone that kept running yesterday's code</h3>
+  <p>Fixes kept "not working" on the iPhone. They were working; Safari wasn't running them. GitHub Pages serves every file with a ten-minute cache and offers no way to change that, and a page made of ES modules is a dozen files, each cached on its own. A reload could fetch a new <code>index.html</code> and old modules, or a mix of two deploys. The fix is in the deploy workflow: it copies <code>js/</code> and <code>css/</code> into a folder named after the commit, <code>v/1a2b3c4/</code>, and rewrites the two references in <code>index.html</code> to point there. Every deploy gives every script a new URL, and relative imports keep the whole module graph inside one folder, so a page can only ever run one version. The same step stamps the time and commit into the first line of Stats, so you can see which one you have.</p>
+
+  <h2 id="next">13. What was measured, and what to try next</h2>
   <div class="reference">
-    <span class="who">Not measured</span>
-    Everything here was run on a software GPU at one or two frames a second. That proves the shaders are correct. It says nothing about speed. No frame rate in these docs comes from real hardware, and the count limits (2,000 / 20,000 / 200,000, and 50,000 for N²) are estimates, not benchmarks.
+    <span class="who">Measured on real hardware</span>
+    The tests and screenshots were run on a software GPU at one or two frames a second. That proves the shaders are correct and says nothing about speed. The real numbers come from an iPhone 16 Pro in Direct mode with the grid, read off the Stats chart: at 20,000 grains about 2 ms a physics step with 300 ms spikes through the pour, then 15 ms at worst once the walk limit went in; at 100,000, 40 to 60 ms during the flip, a 169 ms peak in the pour and about 3 ms once settled. The count limits (2,000 / 20,000 / 200,000, and 50,000 for N²) are still estimates.
   </div>
   <p>Good experiments on your own machine, with <code>?stats</code> on:</p>
   <ul>
     <li><code>?mode=direct&amp;count=50000</code>, then switch Grid and N² while it runs. N² does 2.5 billion pair tests a frame; the grid does 1.35 million bucket lookups.</li>
+    <li><code>?mode=direct&amp;count=100000&amp;broadphase=sorted</code>, one run with Grid and one with Sorted, and compare the two charts: the flip, the pour, and the settled tail.</li>
     <li>The same count in GPU and Direct mode, to see what the readback costs.</li>
     <li>Raise the count until the frame time climbs, in each mode.</li>
   </ul>
   <p>Where to take it from here:</p>
   <ul>
     <li><strong>Time the GPU properly.</strong> WebGPU has a <code>timestamp-query</code> feature that measures a compute pass in nanoseconds. Frame time only tells you something is slow.</li>
-    <li><strong>A sorted grid.</strong> Count per cell, prefix-sum, scatter. Neighbours end up adjacent in memory, which is kinder to the cache than hashed buckets.</li>
+    <li><strong>Fewer passes for the sort.</strong> If Sorted wins, the count and scatter could reuse last substep's order (grains barely move between substeps), or the scan could use subgroup operations where the browser offers them.</li>
+    <li><strong>Fewer triangles per grain</strong> at high counts, and skipping the light-sleep neighbour scan where possible.</li>
     <li><strong>A fixed timestep.</strong> Physics that runs at 120 Hz whatever the display does, so behaviour doesn't depend on the screen.</li>
     <li><strong>A neck that meters the sand</strong>, as described above.</li>
   </ul>

@@ -1,16 +1,18 @@
 // Browser-side tests for the WGSL physics: ports of GPUPhysicsTests.swift.
 //
 // Node can't run WebGPU, so these run in a page (gpu-tests.html). Each test
-// runs twice, once per broadphase, and one extra test checks that the two
-// broadphases compute the same step.
+// runs once per broadphase (all pairs, linked-list grid, sorted grid), and a
+// few more check that the three compute the same step and that the sort
+// itself is right.
 
 import { createProfile, neckRadiusForParticle } from '../models/hourglassProfile.js';
 import { STRIDE, radiusForCount, packedParticles, mulberry32 } from '../models/packing.js';
 import { summarise } from '../physics/cpuSimulation.js';
-import { computeGrid, cellCoords, hashCell } from '../models/grid.js';
+import { computeGrid, cellCoords, hashCell, SCAN_BLOCK } from '../models/grid.js';
 import { GpuPhysics } from '../physics/gpuPhysics.js';
 
 const DT = 1 / 60;
+const SEARCHES = ['brute', 'grid', 'sorted'];
 
 function expect(condition, message) {
   if (!condition) throw new Error(message);
@@ -200,22 +202,81 @@ const TESTS = {
   },
 };
 
-/** Both broadphases must produce the same step from the same state. */
+/** Every broadphase must produce the same step from the same state. */
 async function broadphasesAgree(engine) {
   const count = 3000;
   const radius = radiusForCount(count);
   const results = {};
-  for (const bp of ['brute', 'grid']) {
+  for (const bp of SEARCHES) {
     configure(engine, bp, count, radius);
     engine.snapAfterFlip();
     // One substep each, so the comparison isn't blurred by chaos.
     for (let i = 0; i < 6; i++) engine.step(DT / 8);
     results[bp] = await read(engine);
   }
-  let worst = 0;
-  for (let i = 0; i < count * STRIDE; i++) worst = Math.max(worst, Math.abs(results.brute[i] - results.grid[i]));
-  expect(worst < 1e-3, `largest difference ${worst}`);
-  return `max difference ${worst.toExponential(1)}`;
+  const notes = [];
+  for (const bp of ['grid', 'sorted']) {
+    let worst = 0;
+    for (let i = 0; i < count * STRIDE; i++) worst = Math.max(worst, Math.abs(results.brute[i] - results[bp][i]));
+    expect(worst < 1e-3, `${bp}: largest difference ${worst}`);
+    notes.push(`${bp} ${worst.toExponential(1)}`);
+  }
+  return `max difference from all pairs: ${notes.join(', ')}`;
+}
+
+/** Copy a GPU buffer into JavaScript (the engine's sort buffers allow it). */
+async function readU32(device, buffer, count) {
+  const staging = device.createBuffer({ size: count * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  const encoder = device.createCommandEncoder();
+  encoder.copyBufferToBuffer(buffer, 0, staging, 0, count * 4);
+  device.queue.submit([encoder.finish()]);
+  await staging.mapAsync(GPUMapMode.READ);
+  const out = new Uint32Array(staging.getMappedRange().slice(0));
+  staging.destroy();
+  return out;
+}
+
+/**
+ * Check the sorted grid's own output after a step: the sorted ids are every
+ * grain exactly once, each bucket's start is where the one before it ended
+ * (the two-level scan joins up), and every grain sits in its bucket's range.
+ * 140,000 grains: 512 scan blocks, so the second scan pass has two per
+ * thread and the hand-off between the two passes gets exercised.
+ */
+async function sortIsRight(engine) {
+  const count = 140000;
+  const radius = radiusForCount(count);
+  configure(engine, 'sorted', count, radius);
+  for (let i = 0; i < 2; i++) engine.step(DT);
+  const { device, buffers, grid } = engine;
+  const ids = await readU32(device, buffers.sortedIds, count);
+  const counts = await readU32(device, buffers.bucketCounts, grid.tableSize);
+  const startsRaw = await readU32(device, buffers.bucketStarts, buffers.bucketStarts.size / 4);
+  const sortedData = new Float32Array((await readU32(device, buffers.sortedParticles, count * STRIDE)).buffer);
+
+  const seen = new Uint8Array(count);
+  for (const id of ids) {
+    expect(id < count && !seen[id], `id ${id} missing or repeated`);
+    seen[id] = 1;
+  }
+  let total = 0;
+  let misplaced = 0;
+  const f = Math.fround;
+  for (let b = 0; b < grid.tableSize; b++) {
+    const start = startsRaw[b] + startsRaw[grid.tableSize + Math.floor(b / SCAN_BLOCK)];
+    expect(start === total, `bucket ${b} starts at ${start}, expected ${total}`);
+    for (let k = 0; k < counts[b]; k++) {
+      // Recompute the bucket from the sorted copy, in float32 like the GPU.
+      const o = (start + k) * STRIDE;
+      const c = [0, 1, 2].map((a) => Math.max(Math.floor(f(f(sortedData[o + a] - f(grid.origin[a])) / f(grid.cellSize))), 0));
+      if (hashCell(grid, ...c) !== b) misplaced++;
+    }
+    total += counts[b];
+  }
+  expect(total === count, `counts add up to ${total}`);
+  // The GPU's division may round differently right on a cell boundary.
+  expect(misplaced <= count * 0.001, `${misplaced} grains outside their bucket's range`);
+  return `${count} grains, ${grid.tableSize / SCAN_BLOCK} scan blocks, ${misplaced} on a cell boundary`;
 }
 
 /**
@@ -261,18 +322,20 @@ async function crowdedBucketKeepsEveryone(engine) {
   chosen.forEach((p, i) => data.set(particle(...p, radius), i * STRIDE));
 
   const results = {};
-  for (const bp of ['brute', 'grid']) {
+  for (const bp of SEARCHES) {
     configure(engine, bp, count, radius, data);
     engine.gravity = 0;
     engine.step(DT);
     results[bp] = await read(engine);
   }
   const gap = (p) => Math.hypot(p[pairAt] - p[pairAt + STRIDE], p[pairAt + 1] - p[pairAt + STRIDE + 1], p[pairAt + 2] - p[pairAt + STRIDE + 2]);
-  expect(gap(results.grid) > 0.0125, `the pair did not push apart (gap ${gap(results.grid)})`);
   let worst = 0;
-  for (let i = 0; i < count * STRIDE; i++) worst = Math.max(worst, Math.abs(results.brute[i] - results.grid[i]));
+  for (const bp of ['grid', 'sorted']) {
+    expect(gap(results[bp]) > 0.0125, `${bp}: the pair did not push apart (gap ${gap(results[bp])})`);
+    for (let i = 0; i < count * STRIDE; i++) worst = Math.max(worst, Math.abs(results.brute[i] - results[bp][i]));
+  }
   expect(worst < 1e-5, `largest difference ${worst}`);
-  return `${fillers + 1} grains in one bucket, max difference ${worst.toExponential(1)}`;
+  return `${fillers + 1} grains in one bucket, both grids within ${worst.toExponential(1)}`;
 }
 
 export async function runGpuSelfTest(device, report = () => {}, only = '') {
@@ -292,13 +355,14 @@ export async function runGpuSelfTest(device, report = () => {}, only = '') {
     results.push(entry);
     report(entry);
   };
-  for (const bp of ['brute', 'grid']) {
+  for (const bp of SEARCHES) {
     for (const [name, fn] of Object.entries(TESTS)) {
       await run(`${name} [${bp}]`, () => fn(engine, bp));
     }
   }
-  await run('brute force and grid agree', () => broadphasesAgree(engine));
+  await run('all three searches agree', () => broadphasesAgree(engine));
   await run('a crowded bucket keeps everyone', () => crowdedBucketKeepsEveryone(engine));
+  await run('the sort puts every grain in its bucket once', () => sortIsRight(engine));
   engine.destroyBuffers();
   return results;
 }

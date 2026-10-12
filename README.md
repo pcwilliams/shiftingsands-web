@@ -1,6 +1,6 @@
 # Shifting Sands (web)
 
-![three.js](https://img.shields.io/badge/three.js-r186%20WebGPU-black) ![WGSL](https://img.shields.io/badge/physics-WGSL%20compute-d9a441) ![No build step](https://img.shields.io/badge/build-none-555) ![Tests](https://img.shields.io/badge/tests-78%20node%20%2B%2022%20GPU-2ea043)
+![three.js](https://img.shields.io/badge/three.js-r186%20WebGPU-black) ![WGSL](https://img.shields.io/badge/physics-WGSL%20compute-d9a441) ![No build step](https://img.shields.io/badge/build-none-555) ![Tests](https://img.shields.io/badge/tests-81%20node%20%2B%2033%20GPU-2ea043)
 
 An hourglass timer for the browser with a real-time granular physics
 simulation. Golden sand grains pour through a glass hourglass built
@@ -24,10 +24,14 @@ it.
     every frame, up to 20,000 grains.
   - **Direct**: WebGPU compute feeding the draw call on the GPU. No grain
     ever visits JavaScript. Up to 200,000 grains.
-- **Two ways to find collisions** on the GPU, switchable while it runs:
+- **Three ways to find collisions** on the GPU, switchable while it runs:
   - **N²**: every grain tests every other grain, exactly as the app does.
   - **Grid**: a spatial hash, so each grain only looks at its neighbours.
     It gives the same physics as N², only faster.
+  - **Sorted**: the same spatial hash, but every substep the grains are
+    counting-sorted by cell, so each cell is one run of memory and the
+    GPU's threads work through the pile cell by cell. It's here to compare
+    against Grid on real hardware.
 - **A glass that fits the sand**: the neck is rebuilt for each grain size
   so that one grain just fits through.
 - **A real flip**: gravity turns with the glass during the 1.2 second
@@ -55,8 +59,9 @@ WebGL 2, and says so.
   fresh sand at the bottom. Space or Enter does the same.
 - Changing the count, size or colours respawns the sand when the
   hourglass is at rest. Changing mode mid-run restarts in the new mode.
-- **Grid / N²** switches live, so you can watch the frame time change
-  with the same sand on screen.
+- **Grid / Sorted / N²** switches live, so you can watch the frame time
+  change with the same sand on screen. The Stats chart covers a whole run,
+  so one run with each is a fair comparison.
 
 ### URL parameters
 
@@ -68,7 +73,7 @@ These are the web's launch arguments. They override the saved settings.
 | `count` | `?count=50000` | Number of grains |
 | `size` | `?size=1.3` | Size multiplier, 0.5 to 1.5 |
 | `duration` | `?duration=30` | Timer length in seconds, 5 to 30 |
-| `broadphase` | `?broadphase=brute` | `grid` or `brute` (N²) |
+| `broadphase` | `?broadphase=sorted` | `grid`, `sorted` or `brute` (N²) |
 | `colors` | `?colors` | A random colour per grain |
 | `stats` | `?stats` | Show the stats readout |
 | `autostart` | `?autostart` | Flip two seconds after loading |
@@ -91,15 +96,16 @@ python3 -m http.server 8000
 node --test
 ```
 
-78 tests cover everything that isn't pixels: the glass profile, spawn
+81 tests cover everything that isn't pixels: the glass profile, spawn
 packing, the CPU physics (ported from the app's `CPUPhysicsTests.swift`),
-the spatial hash, the timer, settings and URL parsing. They need Node 20
+both spatial hashes, the timer, settings and URL parsing. They need Node 20
 or later and have no dependencies.
 
 Node can't run WebGPU, so the compute shaders have their own page:
 open [the GPU test page](https://pcwilliams.github.io/shiftingsands-web/gpu-tests.html) in a WebGPU browser. It runs
 ports of the app's `GPUPhysicsTests.swift` on your GPU, once per
-collision search, and checks that the grid and N² produce the same step.
+collision search, checks that all three searches produce the same step,
+and reads back the sort's own buffers to check them.
 
 ## How it works
 
@@ -123,14 +129,15 @@ shiftingsands-web/
 │   │   ├── hourglassProfile.js   # glass curve, surface of revolution
 │   │   ├── packing.js            # grain radius, hex-packed spawn, colours
 │   │   ├── physicsConfig.js      # constants, per-mode limits, substeps
-│   │   └── grid.js               # spatial hash (reference version)
+│   │   ├── grid.js               # spatial hash and sorted grid (reference versions)
+│   │   └── perfHistory.js        # per-frame timings for the Stats chart
 │   ├── physics/
 │   │   ├── cpuSimulation.js      # CPU physics
 │   │   ├── shaders.js            # WGSL compute kernels
 │   │   └── gpuPhysics.js         # raw WebGPU engine
 │   ├── scene/hourglassScene.js   # three.js scene, instanced sand
 │   ├── services/           # settings store, timer, URL parameters
-│   ├── ui/controls.js      # DOM controls
+│   ├── ui/                 # DOM controls, Stats chart
 │   └── dev/gpuSelfTest.js  # tests behind gpu-tests.html
 ├── tests/                  # node --test
 ├── docs/                   # screenshots

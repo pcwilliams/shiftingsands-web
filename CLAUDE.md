@@ -29,8 +29,8 @@ reference, except for the deliberate differences listed below.
   physics share one `GPUDevice`, created in `main.js` and passed to
   `new THREE.WebGPURenderer({ device })`.
 - **Persistence:** `localStorage`, keys prefixed `shiftingsands.`.
-- **Tests:** Node's built-in runner (`node --test`), 78 tests, zero
-  dependencies; plus 22 in-browser GPU tests (`gpu-tests.html`).
+- **Tests:** Node's built-in runner (`node --test`), 81 tests, zero
+  dependencies; plus 33 in-browser GPU tests (`gpu-tests.html`).
 - **Zero npm dependencies.** `package.json` exists for `"type": "module"`
   and the `npm test` alias.
 
@@ -53,7 +53,7 @@ persisted; count, size, duration and colours are.
 | `count` | `?count=50000` | Clamped to the mode's range, rounded to 50 |
 | `size` | `?size=1.3` | 0.5 to 1.5 |
 | `duration` | `?duration=30` | 5 to 30 |
-| `broadphase` | `?broadphase=brute` | `grid` or `brute` (aliases `n2`, `bruteforce`) |
+| `broadphase` | `?broadphase=sorted` | `grid`, `sorted` or `brute` (aliases `sort`, `counting` → `sorted`; `n2`, `bruteforce` → `brute`) |
 | `colors` | `?colors` | Random colours (`multicolor` also accepted) |
 | `stats` | `?stats` | Show the stats readout |
 | `autostart` | `?autostart` | Flip after 2 s |
@@ -78,11 +78,11 @@ shiftingsands-web/
 │   │   ├── hourglassProfile.js  # port of SandGeometry.swift
 │   │   ├── packing.js           # radiusForCount, packedParticles, colours, STRIDE
 │   │   ├── physicsConfig.js     # constants, MODE_INFO, substeps, slider mapping
-│   │   ├── grid.js              # spatial hash sizing + CPU reference build
+│   │   ├── grid.js              # spatial hash sizing + CPU reference builds (lists and sorted), sampleSlot
 │   │   └── perfHistory.js       # RunTimeline: per-frame timings for one whole run
 │   ├── physics/
 │   │   ├── cpuSimulation.js     # port of GranularSimulation.swift (pure)
-│   │   ├── shaders.js           # WGSL: physicsStep (brute/grid), buildGrid, snapAfterFlip
+│   │   ├── shaders.js           # WGSL: physicsStep (brute/grid/sorted), buildGrid, sort passes, snapAfterFlip
 │   │   └── gpuPhysics.js        # port of MetalPhysicsEngine.swift, raw WebGPU
 │   ├── scene/hourglassScene.js  # port of HourglassScene.swift, three.js
 │   ├── services/
@@ -136,8 +136,8 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
 
 - CPU: 4 up to 500 grains, 3 up to 1,000, 2 above.
 - GPU and Direct: 4 up to 1,500, 3 up to 3,000, 2 up to 10,000, 1 above.
-  Both broadphases use the same table on purpose, so switching between
-  them changes speed and nothing else.
+  All three broadphases use the same table on purpose, so switching
+  between them changes speed and nothing else.
 
 ### Flow control (same as the app)
 
@@ -148,11 +148,20 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
 
 ## GPU engine (`gpuPhysics.js` + `shaders.js`)
 
-- **Pipelines** (all compiled once in `GpuPhysics.create`):
-  `physics-brute`, `physics-grid`, `grid-build`, `snap`. `layout: 'auto'`.
+- **Pipelines** (all compiled once in `GpuPhysics.create`, from the
+  `sources` table there): `physics-brute`, `physics-grid`,
+  `physics-sorted`, `grid-build`, `sort-count`, `sort-scan-blocks`,
+  `sort-scan-sums`, `sort-scatter`, `snap`. `layout: 'auto'`.
 - **Buffers** per configuration: particles A and B (STORAGE | COPY_SRC |
   COPY_DST), uniforms (64 bytes), profile table (256 floats), bucket
-  heads, bucket next-links, readback staging (MAP_READ | COPY_DST).
+  heads, bucket next-links, the sorted grid's five (below), readback
+  staging (MAP_READ | COPY_DST). Every search's buffers are allocated
+  whatever the broadphase, so the switch is instant; `memoryBytes` is the
+  total of all of them.
+- **One compute pass per substep.** The clear goes before it (it can't be
+  inside a pass), then the build or sort dispatches and the physics
+  dispatch share the pass. WebGPU synchronises storage writes between
+  dispatches, so each sees the one before.
 - **Double buffering:** each substep reads one particle buffer and writes
   the other; `current` flips. Two bind groups per pipeline (A→B, B→A).
 - **One submit per frame:** all substeps (and the grid rebuild before
@@ -213,6 +222,50 @@ Without WebGPU the renderer is created with `forceWebGL: true` and only
 - `js/models/grid.js` is a CPU reference of the same arithmetic. A unit
   test checks it finds every true contact; a GPU test checks that grid
   and brute force produce the same step (largest difference 1e-6 to 3e-6 across runs).
+
+### Sorted grid broadphase (`sorted`, added to compare with `grid` on the phone)
+
+Same cells, hash, table size and walk limit as the grid. Instead of
+linked lists, every substep counting-sorts a **copy** of the particles by
+bucket, so a bucket is a contiguous range.
+
+- **Passes per substep:** `clearBuffer(bucketCounts)`, then in one pass:
+  `countBuckets` (`rank = atomicAdd(&bucketCounts[b], 1)`), `scanBlocks`,
+  `scanSums`, `scatter` (`slot = start + rank`, no atomics), physics.
+- **Scan:** two levels. `SCAN_BLOCK` = 1,024 buckets per workgroup of 256
+  threads, each loading four counters as a `vec4u` (the table size is a
+  power of two, so it divides by four); Hillis-Steele in workgroup memory.
+  `bucketStarts` is `tableSize` starts-within-block followed by one entry
+  per block; `scanBlocks` writes the block totals there and `scanSums`
+  (one workgroup, a serial run per thread, up to 512 blocks at 200,000)
+  turns them into block starts. A bucket's start is
+  `bucketStarts[b] + bucketStarts[tableSize + b / SCAN_BLOCK]`. The first
+  version used 256 buckets per block; on SwiftShader the block scan cost
+  40 ms a step at 10,000 grains (barrier emulation), 10 ms with 1,024.
+- **Identity is kept.** The particle buffers are never reordered:
+  `sortedParticles` is a snapshot copy and `sortedIds[slot]` is the grain
+  it came from. Results go to `particlesOut[tid]`. Colours, the `tid % 30`
+  deep-sleep stagger, `sweepOrder(tid)` and the tests all keep working.
+- **Threads run in sorted order:** `let tid = sortedIds[gid.x]` at the top
+  of the kernel, so a workgroup handles grains from a few cells. The rest
+  of the kernel is unchanged.
+- **Reading a bucket:** `min(n, BUCKET_WALK_LIMIT)` visits from a random
+  start (`sampleOffset(tid, bucket)`, scaled by `n` in float to avoid an
+  integer division). If `n` fits, every slot in rotated order; if not,
+  visits spread evenly along the range (`sampleSlot` in `grid.js` is the
+  same sum, and is unit-tested). Only the crowded case pays the divisions.
+- **Bindings:** the sorted physics kernel uses 7 storage buffers (the
+  default per-stage limit is 8). That is why block starts share the
+  `bucketStarts` buffer instead of having their own.
+- **Measured on SwiftShader at 10,000 grains** (meaningless for speed on
+  real hardware, but the behaviour is identical): same drain curve, same
+  settled pile (level 0.4 radii), all asleep. Physics dispatch alone
+  roughly even with the list grid mid-pour; the sort passes add a
+  baseline that is mostly barrier emulation. No phone numbers yet.
+- When benchmarking stages in isolation, run clear + build + physics
+  together each time. Repeating `countBuckets` without the clear inflates
+  every count and makes the sorted physics look 2x slower than it is
+  (this happened once).
 
 ## Scene (`hourglassScene.js`)
 
@@ -289,7 +342,8 @@ frame. Two-phase start: `startFlip()` → scene flip (1.2 s, smoothstep) →
   wrote 42 vertices per particle because SceneKit had no route for custom
   instancing. Here the vertex shader does it. There is no equivalent of
   that kernel.
-- **Spatial hash broadphase** (new), with brute force kept for comparison.
+- **Spatial hash broadphase** (new), in two forms (linked lists, and
+  counting-sorted), with brute force kept for comparison.
 - **Higher limits:** CPU 2,000 (app 250), Direct 200,000 (app 50,000).
 - **Deep-sleep stagger fixed.** The app's counter saturates at 60, after
   which `counter % 30 == tid % 30` is only ever true for threads where
@@ -331,19 +385,23 @@ frame. Two-phase start: `startFlip()` → scene flip (1.2 s, smoothstep) →
 
 ## Tests
 
-Node (78): `perfHistory` (8), `geometry` (10), `packing` (10), `cpuPhysics` (11, including
-ports of the app's CPU tests), `grid` (8), `config` (10), `timer` (8),
+Node (81): `perfHistory` (8), `geometry` (10), `packing` (10), `cpuPhysics` (11, including
+ports of the app's CPU tests), `grid` (11: includes the sorted layout,
+sorted vs list candidates, and sampleSlot spread), `config` (10), `timer` (8),
 `settings` (13).
 
-Browser (22, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
+Browser (33, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
 settle-and-sleep, wake-on-support-loss, mid-air-clump-falls,
 nothing-sticks-to-the-side-wall,
 pile-rests-level-and-centred and a
 5,000-grain containment run,
-each for `brute` and `grid`, plus "brute force and grid agree" and "a
-crowded bucket keeps everyone". The agreement test uses a loose pile and
+each for `brute`, `grid` and `sorted`, plus "all three searches agree",
+"a crowded bucket keeps everyone" (both grids; 31 grains in one bucket,
+under the walk limit) and "the sort puts every grain in its bucket once"
+(140,000 grains, 512 scan blocks; reads the sort buffers back, which is
+why they have COPY_SRC). The agreement test uses a loose pile and
 cannot be made crowded: with many simultaneous contacts the result
-depends on visiting order, so the two searches legitimately differ.
+depends on visiting order, so the searches legitimately differ.
 
 Rule of thumb, as in the app: decision logic goes in `js/models` or
 `js/services` as pure functions with explicit inputs, and is tested
@@ -376,8 +434,11 @@ Playwright's Chromium can run WebGPU on SwiftShader, with these flags:
   steps), wait two animation frames, then screenshot. If the page's own
   loop is left running it double-steps the flip and the frame count
   means nothing.
-- **Do not use it to judge frame rates.** No performance number in this
-  repo's docs was measured on a real GPU.
+- **Do not use it to judge frame rates.** Real-hardware numbers come only
+  from the user's phone (the iPhone section below). SwiftShader emulates
+  `workgroupBarrier` on the CPU, so anything barrier-heavy (the sorted
+  grid's scan) looks far worse there than on a GPU.
+- `?only=sort` on `gpu-tests.html` runs just the sorted-grid tests.
 
 `window.shiftingSands = { scene, store, timer, start, reset, adapter,
 results }` is exposed for devtools and the harness.
@@ -419,10 +480,12 @@ physics peaks at 15 ms, flat through the pour, pile settles clean.
 
 At 100,000 grains on the same phone (same build) it struggles in two
 places: about 40 to 60 ms per step during the flip (every grain awake and
-tumbling) and a peak of 169 ms in the pour, about 3 ms once settled. Not
-worked on. Candidate next steps: a counting-sort grid (cell-contiguous
-particles, coherent memory) instead of hashed linked lists; skipping the
-light-sleep neighbour scan where possible; fewer triangles per grain.
+tumbling) and a peak of 169 ms in the pour, about 3 ms once settled.
+Response so far: the `sorted` broadphase, added as a third option so the
+whole-run chart can compare it with `grid` on the phone before anything
+is replaced. Awaiting those numbers. Other candidates: skipping the
+light-sleep neighbour scan where possible; fewer triangles per grain;
+reusing the previous substep's sort order.
 
 The "drawing" spikes in the
 same window are an artefact: drawing is whole-frame drain time minus a
@@ -432,6 +495,12 @@ physics sample from a different frame, so it swings between 0 and about
 Things tried that did not help: a larger hash table (visits 40 to 35);
 capping contacts per grain at 48 (the cost is grains near a crowded cell
 walking it, not grains in it making contacts).
+
+## Releases
+
+- **v1.0.0** = `6b0b7e9` (grid with walk limit, support-from-below,
+  per-commit deploy folder). The session couldn't push tags (403), so the
+  user creates it on GitHub.
 
 ## Open issue: blank start in the GPU modes on macOS Safari
 

@@ -14,11 +14,12 @@
 // constant U& u     [[buffer(0)]]      @group(0) @binding(0) var<uniform> u: U;
 // float3 / float4 / uint               vec3f / vec4f / u32
 //
-// The physics kernel is generated in two flavours that differ only in how a
+// The physics kernel is generated in three flavours that differ only in how a
 // particle finds its neighbours: 'brute' tests every other particle (the
-// app's O(N²) loop) and 'grid' looks in a spatial hash.
+// app's O(N²) loop), 'grid' walks linked lists in a spatial hash, and
+// 'sorted' reads ranges of a copy of the particles sorted by hash bucket.
 
-import { BUCKET_WALK_LIMIT } from '../models/grid.js';
+import { BUCKET_WALK_LIMIT, SCAN_BLOCK } from '../models/grid.js';
 import { PROFILE_TABLE_SIZE } from '../models/hourglassProfile.js';
 
 export const WORKGROUP_SIZE = 64;
@@ -73,6 +74,16 @@ fn hashCell(c: vec3i) -> u32 {
   let h = (u32(c.x) * 73856093u) ^ (u32(c.y) * 19349663u) ^ (u32(c.z) * 83492791u);
   return h & u.tableMask;
 }
+
+// Where to start in a bucket's range (sorted grid): different for every
+// grain, bucket and frame.
+fn sampleOffset(tid: u32, bucket: u32) -> u32 {
+  var h = (tid * 2654435761u) ^ (bucket * 2246822519u) ^ (u32(u.gridOrigin.w) * 3266489917u);
+  h ^= h >> 15u;
+  h *= 2246822519u;
+  h ^= h >> 13u;
+  return h;
+}
 `;
 
 // ---------------------------------------------------------------------------
@@ -100,6 +111,137 @@ fn buildGrid(@builtin(global_invocation_id) gid: vec3u) {
   if (tid >= u.particleCount) { return; }
   let bucket = hashCell(cellOf(particlesIn[tid].posRadius.xyz));
   nextInBucket[tid] = atomicExchange(&bucketHeads[bucket], tid + 1u);
+}
+`;
+
+// ---------------------------------------------------------------------------
+// Sorted grid: a counting sort by bucket, in four dispatches per substep.
+// models/grid.js explains the idea and has the CPU version.
+//
+// bucketStarts holds two things back to back: tableSize per-bucket starts,
+// each counted from the beginning of its block of 1,024 buckets, and then
+// one total per block, which the second scan pass turns into the block's
+// own start. A bucket's real start is the sum of the two.
+// ---------------------------------------------------------------------------
+
+const SCAN_THREADS = SCAN_BLOCK / 4;
+
+// 1. Count. atomicAdd returns the counter's value before my +1, which is my
+//    rank among the grains in this bucket.
+export const SORT_COUNT_WGSL = /* wgsl */ `
+${COMMON}
+@group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
+@group(0) @binding(2) var<storage, read_write> bucketCounts: array<atomic<u32>>;
+@group(0) @binding(3) var<storage, read_write> rankInBucket: array<u32>;
+
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn countBuckets(@builtin(global_invocation_id) gid: vec3u) {
+  let tid = gid.x;
+  if (tid >= u.particleCount) { return; }
+  let bucket = hashCell(cellOf(particlesIn[tid].posRadius.xyz));
+  rankInBucket[tid] = atomicAdd(&bucketCounts[bucket], 1u);
+}
+`;
+
+// An inclusive prefix sum across one workgroup, in workgroup memory: eight
+// rounds (log2 of 256), in each of which a thread adds the value 1, 2, 4 ...
+// places to its left. Every thread must reach every barrier, so nothing
+// returns early.
+const WORKGROUP_SCAN = /* wgsl */ `
+var<workgroup> tile: array<u32, ${SCAN_THREADS}>;
+
+fn inclusiveScan(lane: u32, value: u32) -> u32 {
+  tile[lane] = value;
+  workgroupBarrier();
+  for (var offset = 1u; offset < ${SCAN_THREADS}u; offset *= 2u) {
+    var add = 0u;
+    if (lane >= offset) { add = tile[lane - offset]; }
+    workgroupBarrier();
+    tile[lane] += add;
+    workgroupBarrier();
+  }
+  return tile[lane];
+}
+`;
+
+// 2a. Scan each block of 1,024 buckets on its own, and note the block's
+//     total. Each thread loads four counters at once (the table size is a
+//     power of two, so it divides by four), totals them, joins the
+//     workgroup scan with that total, and then writes its four starts.
+export const SCAN_BLOCKS_WGSL = /* wgsl */ `
+${COMMON}
+@group(0) @binding(1) var<storage, read> bucketCounts: array<vec4u>;
+@group(0) @binding(2) var<storage, read_write> bucketStarts: array<u32>;
+${WORKGROUP_SCAN}
+
+@compute @workgroup_size(${SCAN_THREADS})
+fn scanBlocks(@builtin(global_invocation_id) gid: vec3u,
+              @builtin(local_invocation_id) lid: vec3u,
+              @builtin(workgroup_id) wid: vec3u) {
+  let tableSize = u.tableMask + 1u;
+  var four = vec4u(0u);
+  if (gid.x < tableSize / 4u) { four = bucketCounts[gid.x]; }
+  let total = four.x + four.y + four.z + four.w;
+  let before = inclusiveScan(lid.x, total) - total;
+  if (gid.x < tableSize / 4u) {
+    let b = gid.x * 4u;
+    bucketStarts[b] = before;
+    bucketStarts[b + 1u] = before + four.x;
+    bucketStarts[b + 2u] = before + four.x + four.y;
+    bucketStarts[b + 3u] = before + four.x + four.y + four.z;
+  }
+  if (lid.x == ${SCAN_THREADS - 1}u) { bucketStarts[tableSize + wid.x] = before + total; }
+}
+`;
+
+// 2b. One workgroup turns the block totals into block starts. There are up
+//     to 512 blocks (200,000 grains), so each thread first adds up a short
+//     run of them on its own.
+export const SCAN_SUMS_WGSL = /* wgsl */ `
+${COMMON}
+@group(0) @binding(1) var<storage, read_write> bucketStarts: array<u32>;
+${WORKGROUP_SCAN}
+
+@compute @workgroup_size(${SCAN_THREADS})
+fn scanSums(@builtin(local_invocation_id) lid: vec3u) {
+  let tableSize = u.tableMask + 1u;
+  let blocks = (tableSize + ${SCAN_BLOCK - 1}u) / ${SCAN_BLOCK}u;
+  let perThread = (blocks + ${SCAN_THREADS - 1}u) / ${SCAN_THREADS}u;
+  let first = lid.x * perThread;
+  var total = 0u;
+  for (var k = 0u; k < perThread; k++) {
+    if (first + k < blocks) { total += bucketStarts[tableSize + first + k]; }
+  }
+  var running = inclusiveScan(lid.x, total) - total;
+  for (var k = 0u; k < perThread; k++) {
+    if (first + k < blocks) {
+      let blockTotal = bucketStarts[tableSize + first + k];
+      bucketStarts[tableSize + first + k] = running;
+      running += blockTotal;
+    }
+  }
+}
+`;
+
+// 3. Scatter: copy each grain to its slot and remember where it came from.
+//    No atomics: the rank from step 1 makes every slot unique.
+export const SORT_SCATTER_WGSL = /* wgsl */ `
+${COMMON}
+@group(0) @binding(1) var<storage, read> particlesIn: array<Particle>;
+@group(0) @binding(2) var<storage, read> bucketStarts: array<u32>;
+@group(0) @binding(3) var<storage, read> rankInBucket: array<u32>;
+@group(0) @binding(4) var<storage, read_write> sortedParticles: array<Particle>;
+@group(0) @binding(5) var<storage, read_write> sortedIds: array<u32>;
+
+@compute @workgroup_size(${WORKGROUP_SIZE})
+fn scatter(@builtin(global_invocation_id) gid: vec3u) {
+  let tid = gid.x;
+  if (tid >= u.particleCount) { return; }
+  let p = particlesIn[tid];
+  let bucket = hashCell(cellOf(p.posRadius.xyz));
+  let slot = bucketStarts[bucket] + bucketStarts[u.tableMask + 1u + bucket / ${SCAN_BLOCK}u] + rankInBucket[tid];
+  sortedParticles[slot] = p;
+  sortedIds[slot] = tid;
 }
 `;
 
@@ -150,11 +292,18 @@ function forEachNeighbour(broadphase, centre, body) {
             if (repeat) { continue; }
             seen[seenCount] = bucket;
             seenCount++;
+${broadphase === 'sorted' ? sortedBucket(body) : listBucket(body)}
+          }
+        }
+      }
+    }`;
+}
 
-            // Walk the bucket's list, but only so far: see BUCKET_WALK_LIMIT
-            // in models/grid.js for why. A bucket may also hold particles
-            // from some far-off cube with the same hash; the distance tests
-            // in the body reject those.
+// Grid: walk the bucket's list, but only so far: see BUCKET_WALK_LIMIT in
+// models/grid.js for why. A bucket may also hold particles from some far-off
+// cube with the same hash; the distance tests in the body reject those.
+function listBucket(body) {
+  return /* wgsl */ `
             var link = bucketHeads[bucket];
             var walked = 0u;
             while (link != 0u && !stop && walked < ${BUCKET_WALK_LIMIT}u) {
@@ -164,11 +313,39 @@ function forEachNeighbour(broadphase, centre, body) {
               if (j == tid) { continue; }
               let other = particlesIn[j];
               ${body}
-            }
-          }
-        }
-      }
-    }`;
+            }`;
+}
+
+// Sorted: the bucket is a range of the sorted copy. Visit up to
+// BUCKET_WALK_LIMIT slots of it, starting at a random place and, when the
+// range is longer than that, spread evenly along it (sampleSlot in
+// models/grid.js is the same sum).
+function sortedBucket(body) {
+  return /* wgsl */ `
+            let n = bucketCounts[bucket];
+            if (n == 0u) { continue; }
+            let first = bucketStarts[bucket] + bucketStarts[u.tableMask + 1u + bucket / ${SCAN_BLOCK}u];
+            let visits = min(n, ${BUCKET_WALK_LIMIT}u);
+            // A start in 0..n-1 without an integer division, which GPUs do
+            // in software: scale the top 24 bits of the hash by n.
+            let offset = min(u32(f32(sampleOffset(tid, bucket) >> 8u) * (1.0 / 16777216.0) * f32(n)), n - 1u);
+            var at = offset;
+            for (var v = 0u; v < visits && !stop; v++) {
+              let slot = first + at;
+              // Next slot. Usually the bucket fits under the limit and this
+              // is just the next one round; only a crowded bucket pays for
+              // the divisions that spread the visits along it.
+              if (n > ${BUCKET_WALK_LIMIT}u) {
+                at = (offset + ((v + 1u) * n) / ${BUCKET_WALK_LIMIT}u) % n;
+              } else {
+                at++;
+                if (at == n) { at = 0u; }
+              }
+              let j = sortedIds[slot];
+              if (j == tid) { continue; }
+              let other = sortedParticles[slot];
+              ${body}
+            }`;
 }
 
 /**
@@ -185,6 +362,7 @@ function forEachNeighbour(broadphase, centre, body) {
  */
 export function physicsWGSL(broadphase) {
   const grid = broadphase === 'grid';
+  const sorted = broadphase === 'sorted';
   const neighbours = (centre, body) => forEachNeighbour(broadphase, centre, body);
 
   return /* wgsl */ `
@@ -195,6 +373,11 @@ ${COMMON}
 ${grid ? /* wgsl */ `
 @group(0) @binding(4) var<storage, read> bucketHeads: array<u32>;
 @group(0) @binding(5) var<storage, read> nextInBucket: array<u32>;` : ''}
+${sorted ? /* wgsl */ `
+@group(0) @binding(4) var<storage, read> bucketCounts: array<u32>;
+@group(0) @binding(5) var<storage, read> bucketStarts: array<u32>;
+@group(0) @binding(6) var<storage, read> sortedParticles: array<Particle>;
+@group(0) @binding(7) var<storage, read> sortedIds: array<u32>;` : ''}
 
 // Inner glass radius at height y: O(1) lookup in a 256-entry table.
 fn glassRadius(y: f32) -> f32 {
@@ -237,8 +420,13 @@ fn deeperSleep(counter: f32) -> f32 {
 
 @compute @workgroup_size(${WORKGROUP_SIZE})
 fn physicsStep(@builtin(global_invocation_id) gid: vec3u) {
-  let tid = gid.x;
-  if (tid >= u.particleCount) { return; }
+  if (gid.x >= u.particleCount) { return; }
+${sorted ? /* wgsl */ `
+  // Threads take grains in sorted order, so neighbouring threads handle
+  // neighbouring grains and read the same few ranges. Everything else,
+  // including where the result goes, uses the grain's own index.
+  let tid = sortedIds[gid.x];` : /* wgsl */ `
+  let tid = gid.x;`}
 
   let me = particlesIn[tid];
   var pos = me.posRadius.xyz;

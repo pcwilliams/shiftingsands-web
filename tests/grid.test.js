@@ -4,7 +4,8 @@ import { createProfile, neckRadiusForParticle } from '../js/models/hourglassProf
 import { STRIDE, radiusForCount, packedParticles, mulberry32 } from '../js/models/packing.js';
 import {
   computeGrid, cellCoords, hashCell, buildGridCPU, neighbourCandidates,
-  nextPowerOfTwo, CELL_SCALE,
+  nextPowerOfTwo, CELL_SCALE, buildSortedCPU, sortedCandidates, sampleSlot,
+  BUCKET_WALK_LIMIT, SCAN_BLOCK, scanBlocks,
 } from '../js/models/grid.js';
 
 function pile(count, seed = 3) {
@@ -126,4 +127,55 @@ test('candidates per particle stay small as the count grows', () => {
   // About 45: the true neighbours plus a few strangers that share a bucket.
   assert.ok(few < 60 && many < 60, `few=${few} many=${many}`);
   assert.ok(many < few * 1.6, 'cost per particle should not scale with N');
+});
+
+test('sorted grid: every grain gets one slot, and each bucket is one run', () => {
+  const count = 3000;
+  const { radius, data } = pile(count);
+  const grid = computeGrid(radius, count);
+  const sorted = buildSortedCPU(grid, data, count);
+  assert.deepEqual([...sorted.ids].sort((a, b) => a - b), Array.from({ length: count }, (_, i) => i));
+  let total = 0;
+  for (let b = 0; b < grid.tableSize; b++) {
+    assert.equal(sorted.starts[b], total, `bucket ${b} does not start where the last one ended`);
+    for (let k = 0; k < sorted.counts[b]; k++) {
+      const o = sorted.ids[total + k] * STRIDE;
+      assert.equal(hashCell(grid, ...cellCoords(grid, data[o], data[o + 1], data[o + 2])), b);
+    }
+    total += sorted.counts[b];
+  }
+  assert.equal(total, count);
+  // The scan works in blocks of 1,024 buckets; 200,000 grains means 512 blocks.
+  assert.equal(scanBlocks(computeGrid(0.0013, 200000).tableSize), 512);
+  assert.equal(scanBlocks(64), 1);
+  assert.equal(SCAN_BLOCK % 4, 0);
+});
+
+test('sorted grid finds exactly the candidates the linked lists find', () => {
+  const count = 3000;
+  const { radius, data } = pile(count);
+  const grid = computeGrid(radius, count);
+  const lists = buildGridCPU(grid, data, count);
+  const sorted = buildSortedCPU(grid, data, count);
+  for (let i = 0; i < count; i += 11) {
+    const a = i * STRIDE;
+    const fromLists = neighbourCandidates(grid, lists, data[a], data[a + 1], data[a + 2]).sort((x, y) => x - y);
+    const fromSorted = sortedCandidates(grid, sorted, data[a], data[a + 1], data[a + 2]).sort((x, y) => x - y);
+    assert.deepEqual(fromSorted, fromLists);
+  }
+});
+
+test('a crowded range is sampled evenly; a short one is visited whole', () => {
+  for (const n of [1, 5, BUCKET_WALK_LIMIT, BUCKET_WALK_LIMIT + 1, 100, 938, 5000]) {
+    for (const offset of [0, 7, 123456789]) {
+      const visits = Math.min(n, BUCKET_WALK_LIMIT);
+      const slots = Array.from({ length: visits }, (_, i) => sampleSlot(i, n, offset));
+      assert.equal(new Set(slots).size, visits, `n=${n}: a slot visited twice`);
+      assert.ok(slots.every((s) => s >= 0 && s < n));
+      // Gaps between visited slots (round the range) are all n/visits, give or take one.
+      const sortedSlots = [...slots].sort((a, b) => a - b);
+      const gaps = sortedSlots.map((s, i) => ((sortedSlots[(i + 1) % visits] - s) + n) % n || n);
+      assert.ok(Math.max(...gaps) - Math.min(...gaps) <= 1, `n=${n}: gaps ${Math.min(...gaps)}..${Math.max(...gaps)}`);
+    }
+  }
 });

@@ -107,7 +107,7 @@ html, body {
   background: var(--fill);
   width: 200px;
 }
-.segmented.small { width: 132px; }
+.segmented.small { width: 186px; }
 .segmented button {
   flex: 1;
   padding: 6px 4px;
@@ -204,7 +204,7 @@ html, body {
 @media (max-width: 560px) {
   .notice { top: auto; bottom: 150px; }
   .segmented { width: 168px; }
-  .segmented.small { width: 112px; }
+  .segmented.small { width: 156px; }
   .slider input { width: 136px; }
   .readout { font-size: 40px; }
   /* The top-right controls are taller than the toggles: start the stats

@@ -93,28 +93,123 @@ export function buildGridCPU(grid, particles, count, stride = 8) {
   return { heads, next };
 }
 
-/**
- * Indices of every particle in the buckets of the 27 cubes around (x, y, z).
- * No duplicates. May include particles from unrelated cubes that share a
- * bucket; callers reject those by distance.
- */
-export function neighbourCandidates(grid, built, x, y, z) {
+/** The distinct buckets of the 27 cubes around (x, y, z), in sweep order. */
+function neighbourBuckets(grid, x, y, z) {
   const [cx, cy, cz] = cellCoords(grid, x, y, z);
-  const out = [];
-  const seen = [];
+  const buckets = [];
   for (let dz = -1; dz <= 1; dz++) {
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const nx = cx + dx, ny = cy + dy, nz = cz + dz;
         if (nx < 0 || ny < 0 || nz < 0) continue;
         const bucket = hashCell(grid, nx, ny, nz);
-        if (seen.includes(bucket)) continue;
-        seen.push(bucket);
-        for (let link = built.heads[bucket]; link !== 0; link = built.next[link - 1]) {
-          out.push(link - 1);
-        }
+        if (!buckets.includes(bucket)) buckets.push(bucket);
       }
     }
+  }
+  return buckets;
+}
+
+/**
+ * Indices of every particle in the buckets of the 27 cubes around (x, y, z).
+ * No duplicates. May include particles from unrelated cubes that share a
+ * bucket; callers reject those by distance.
+ */
+export function neighbourCandidates(grid, built, x, y, z) {
+  const out = [];
+  for (const bucket of neighbourBuckets(grid, x, y, z)) {
+    for (let link = built.heads[bucket]; link !== 0; link = built.next[link - 1]) {
+      out.push(link - 1);
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// The sorted grid: the same cells and the same hash, stored a different way.
+//
+// Instead of a linked list per bucket, every particle is copied into one long
+// array in bucket order, so each bucket's particles sit side by side and a
+// bucket is just a range: start and count. This is a counting sort:
+//
+//   1. count:   each particle bumps its bucket's counter, and the value it
+//               saw is its rank within the bucket (0, 1, 2 ...)
+//   2. scan:    a running total over the counters gives each bucket's start
+//   3. scatter: particle i goes to slot start[bucket] + rank[i]
+//
+// Why bother, when the lists work?
+//   - Walking a list is a chain of dependent loads: the GPU can't fetch the
+//     next grain until the last one arrives. A range can be fetched in any
+//     order, all at once.
+//   - Neighbours are next to each other in memory, so they share cache lines.
+//   - The physics threads run in sorted order too, so the 64 threads of a
+//     workgroup handle 64 grains in the same few cells and read the same
+//     ranges.
+//   - A crowded bucket can be sampled evenly (see sampleSlot) rather than by
+//     taking whichever 32 grains happen to be first in the list.
+//
+// The particle buffers themselves are never reordered. The sorted array is a
+// copy made fresh every substep, with each slot remembering which particle it
+// came from, and results are written back to the particle's own slot. So a
+// grain keeps its index for good: its colour, its place in the deep-sleep
+// stagger, and the tests that follow it by index all carry on working.
+// ---------------------------------------------------------------------------
+
+/**
+ * Buckets per block in the scan. A workgroup of 256 threads scans one
+ * block, each thread taking four neighbouring buckets as one 16-byte load.
+ */
+export const SCAN_BLOCK = 1024;
+
+/** Blocks the scan splits the bucket table into. */
+export function scanBlocks(tableSize) {
+  return Math.ceil(tableSize / SCAN_BLOCK);
+}
+
+/**
+ * CPU version of the three passes. The GPU computes ranks with atomics, so
+ * its order within a bucket can differ from this one; the ranges can't.
+ * Returns counts and starts per bucket, and ids[slot] = particle index.
+ */
+export function buildSortedCPU(grid, particles, count, stride = 8) {
+  const counts = new Uint32Array(grid.tableSize);
+  const rank = new Uint32Array(count);
+  const bucketOf = new Uint32Array(count);
+  for (let i = 0; i < count; i++) {
+    const o = i * stride;
+    const bucket = hashCell(grid, ...cellCoords(grid, particles[o], particles[o + 1], particles[o + 2]));
+    bucketOf[i] = bucket;
+    rank[i] = counts[bucket]++;
+  }
+  const starts = new Uint32Array(grid.tableSize);
+  let total = 0;
+  for (let b = 0; b < grid.tableSize; b++) {
+    starts[b] = total;
+    total += counts[b];
+  }
+  const ids = new Uint32Array(count);
+  for (let i = 0; i < count; i++) ids[starts[bucketOf[i]] + rank[i]] = i;
+  return { counts, starts, ids };
+}
+
+/**
+ * Which slot of an n-grain bucket to look at on visit i, starting from a
+ * per-grain random offset. Visits min(n, BUCKET_WALK_LIMIT) slots, all
+ * different. When the bucket fits under the limit that is every slot, in a
+ * rotated order; when it doesn't, the visits are spread evenly across the
+ * whole range instead of bunching at one end. The WGSL does the same sum.
+ */
+export function sampleSlot(i, n, offset) {
+  const visits = Math.min(n, BUCKET_WALK_LIMIT);
+  return (offset % n + Math.floor((i * n) / visits)) % n;
+}
+
+/** Like neighbourCandidates, from the sorted layout, with no limit. */
+export function sortedCandidates(grid, sorted, x, y, z) {
+  const out = [];
+  for (const bucket of neighbourBuckets(grid, x, y, z)) {
+    const start = sorted.starts[bucket];
+    for (let k = 0; k < sorted.counts[bucket]; k++) out.push(sorted.ids[start + k]);
   }
   return out;
 }

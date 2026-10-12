@@ -15,8 +15,13 @@ export const MODE_INFO = Object.freeze({
   direct: { label: 'Direct', min: 50, max: 200000, defaultCount: 10000, needsWebGPU: true },
 });
 
-/** Broadphase: how each particle finds the others it might touch. */
-export const BROADPHASES = Object.freeze(['grid', 'brute']);
+/**
+ * Broadphase: how each particle finds the others it might touch.
+ * grid: spatial hash, a linked list per bucket.
+ * sorted: the same hash, with the grains sorted by bucket every substep.
+ * brute: every grain tests every other grain.
+ */
+export const BROADPHASES = Object.freeze(['grid', 'sorted', 'brute']);
 
 /** Above this, the all-pairs kernel is too slow to be worth offering. */
 export const BRUTE_FORCE_MAX = 50000;
@@ -90,14 +95,14 @@ export function clampDuration(duration) {
 /**
  * Collision search work per frame, for the on-screen stats.
  * CPU: each pair once. Brute-force GPU: every thread scans everyone.
- * Grid: every thread looks in 27 buckets, whatever N is.
+ * Grid and sorted: every thread looks in 27 buckets, whatever N is.
  */
 export function searchWorkPerFrame(mode, count, broadphase) {
   if (mode === 'cpu') {
     return { value: (count * (count - 1) / 2) * cpuSubsteps(count), unit: 'pair tests' };
   }
   const substeps = gpuSubsteps(count);
-  return broadphase === 'grid'
+  return broadphase !== 'brute'
     ? { value: count * 27 * substeps, unit: 'bucket lookups' }
     : { value: count * count * substeps, unit: 'pair tests' };
 }

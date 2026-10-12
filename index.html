@@ -50,6 +50,7 @@
     </div>
     <div class="segmented small" role="radiogroup" aria-label="Collision search" id="broadphase">
       <button type="button" role="radio" data-value="grid" title="Spatial hash grid: each grain checks only its neighbours">Grid</button>
+      <button type="button" role="radio" data-value="sorted" title="Spatial hash, with the grains sorted by cell every step so each cell is one run of memory">Sorted</button>
       <button type="button" role="radio" data-value="brute" title="All pairs: each grain checks every other grain, as the iOS app does">N²</button>
     </div>
     <label class="slider">

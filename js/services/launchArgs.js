@@ -4,7 +4,7 @@
 //   ?count=N               particle count
 //   ?size=F                size multiplier, 0.5 to 1.5
 //   ?duration=S            timer length in seconds, 5 to 30
-//   ?broadphase=grid|brute GPU collision search
+//   ?broadphase=grid|sorted|brute GPU collision search
 //   ?colors                random colour per particle
 //   ?autostart             flip two seconds after load
 //   ?test                  10 s run, auto-start, results on window.shiftingSands.results
@@ -42,6 +42,7 @@ export function parseLaunchArgs(search = '') {
 
   let broadphase = params.get('broadphase')?.toLowerCase() ?? null;
   if (broadphase === 'n2' || broadphase === 'bruteforce') broadphase = 'brute';
+  if (broadphase === 'sort' || broadphase === 'counting') broadphase = 'sorted';
   if (!BROADPHASES.includes(broadphase)) broadphase = null;
 
   const seed = number(params, 'seed');

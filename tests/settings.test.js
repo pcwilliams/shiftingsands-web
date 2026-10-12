@@ -108,6 +108,8 @@ test('parseLaunchArgs: values, aliases and flags', () => {
   assert.equal(parseLaunchArgs('?mode=cpu').mode, 'cpu');
   assert.equal(parseLaunchArgs('?mode=gpu').mode, 'gpu');
   assert.equal(parseLaunchArgs('?multicolor').colors, true);
+  assert.equal(parseLaunchArgs('?broadphase=sorted').broadphase, 'sorted');
+  assert.equal(parseLaunchArgs('?broadphase=sort').broadphase, 'sorted');
   assert.equal(parseLaunchArgs('?colors=0').colors, false);
 });
 

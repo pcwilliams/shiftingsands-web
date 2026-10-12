@@ -23,8 +23,9 @@ test('substep tables match the app', () => {
   assert.deepEqual([1500, 1501, 3000, 3001, 10000, 10001, 200000].map(gpuSubsteps), [4, 3, 3, 2, 2, 1, 1]);
 });
 
-test('brute force has a lower ceiling than the grid', () => {
+test('brute force has a lower ceiling than the grids', () => {
   assert.equal(maxCount('direct', 'grid'), 200000);
+  assert.equal(maxCount('direct', 'sorted'), 200000);
   assert.equal(maxCount('direct', 'brute'), BRUTE_FORCE_MAX);
   assert.equal(maxCount('gpu', 'brute'), MODE_INFO.gpu.max);
   assert.equal(maxCount('cpu', 'brute'), MODE_INFO.cpu.max);
@@ -49,6 +50,7 @@ test('search work: all-pairs grows with N squared, the grid with N', () => {
   const grid = (n) => searchWorkPerFrame('direct', n, 'grid').value;
   assert.equal(brute(40000) / brute(20000), 4);
   assert.equal(grid(40000) / grid(20000), 2);
+  assert.deepEqual(searchWorkPerFrame('direct', 20000, 'sorted'), searchWorkPerFrame('direct', 20000, 'grid'));
   assert.equal(searchWorkPerFrame('cpu', 100, 'grid').value, 4950 * 4);
   assert.equal(searchWorkPerFrame('direct', 50000, 'brute').value, 2.5e9);
 });

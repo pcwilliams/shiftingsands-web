@@ -17,9 +17,10 @@
 import { CHAMBER_BOTTOM, CHAMBER_TOP } from '../models/hourglassProfile.js';
 import { STRIDE } from '../models/packing.js';
 import { PHYSICS, gpuSubsteps } from '../models/physicsConfig.js';
-import { computeGrid } from '../models/grid.js';
+import { computeGrid, scanBlocks } from '../models/grid.js';
 import {
   WORKGROUP_SIZE, UNIFORM_BYTES, GRID_BUILD_WGSL, SNAP_WGSL, physicsWGSL,
+  SORT_COUNT_WGSL, SCAN_BLOCKS_WGSL, SCAN_SUMS_WGSL, SORT_SCATTER_WGSL,
 } from './shaders.js';
 
 const PARTICLE_BYTES = STRIDE * 4;
@@ -40,21 +41,24 @@ export class GpuPhysics {
   static async create(device) {
     const engine = new GpuPhysics(device);
     device.pushErrorScope('validation');
-    const [brute, grid, build, snap] = await Promise.all([
-      compile(device, 'physics-brute', physicsWGSL('brute')),
-      compile(device, 'physics-grid', physicsWGSL('grid')),
-      compile(device, 'grid-build', GRID_BUILD_WGSL),
-      compile(device, 'snap', SNAP_WGSL),
-    ]);
-    const pipeline = (label, module, entryPoint) =>
-      device.createComputePipelineAsync({ label, layout: 'auto', compute: { module, entryPoint } });
-    [engine.pipelines.brute, engine.pipelines.grid, engine.pipelines.build, engine.pipelines.snap] =
-      await Promise.all([
-        pipeline('physics-brute', brute, 'physicsStep'),
-        pipeline('physics-grid', grid, 'physicsStep'),
-        pipeline('grid-build', build, 'buildGrid'),
-        pipeline('snap', snap, 'snapAfterFlip'),
-      ]);
+    // name: [label, WGSL, entry point]
+    const sources = {
+      brute: ['physics-brute', physicsWGSL('brute'), 'physicsStep'],
+      grid: ['physics-grid', physicsWGSL('grid'), 'physicsStep'],
+      sorted: ['physics-sorted', physicsWGSL('sorted'), 'physicsStep'],
+      build: ['grid-build', GRID_BUILD_WGSL, 'buildGrid'],
+      sortCount: ['sort-count', SORT_COUNT_WGSL, 'countBuckets'],
+      scanBlocks: ['sort-scan-blocks', SCAN_BLOCKS_WGSL, 'scanBlocks'],
+      scanSums: ['sort-scan-sums', SCAN_SUMS_WGSL, 'scanSums'],
+      scatter: ['sort-scatter', SORT_SCATTER_WGSL, 'scatter'],
+      snap: ['snap', SNAP_WGSL, 'snapAfterFlip'],
+    };
+    await Promise.all(Object.entries(sources).map(async ([name, [label, code, entryPoint]]) => {
+      const module = await compile(device, label, code);
+      engine.pipelines[name] = await device.createComputePipelineAsync({
+        label, layout: 'auto', compute: { module, entryPoint },
+      });
+    }));
     const error = await device.popErrorScope();
     if (error) throw new Error(`WebGPU pipeline error: ${error.message}`);
     return engine;
@@ -136,6 +140,30 @@ export class GpuPhysics {
         label: 'bucket-next', size: Math.max(count, 1) * 4,
         usage: GPUBufferUsage.STORAGE,
       }),
+      // The sorted grid: a counter per bucket, then each bucket's start
+      // (followed by one start per scan block), each grain's rank in its
+      // bucket, and the sorted copy with the index each slot came from.
+      // COPY_SRC on the last few lets the GPU tests read them.
+      bucketCounts: device.createBuffer({
+        label: 'bucket-counts', size: this.grid.tableSize * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+      }),
+      bucketStarts: device.createBuffer({
+        label: 'bucket-starts', size: (this.grid.tableSize + scanBlocks(this.grid.tableSize)) * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      }),
+      rankInBucket: device.createBuffer({
+        label: 'rank-in-bucket', size: Math.max(count, 1) * 4,
+        usage: GPUBufferUsage.STORAGE,
+      }),
+      sortedParticles: device.createBuffer({
+        label: 'sorted-particles', size,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      }),
+      sortedIds: device.createBuffer({
+        label: 'sorted-ids', size: Math.max(count, 1) * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+      }),
       // MAP_READ buffers are the only kind JavaScript can read, and they can't
       // be used by shaders, so reading back always means a GPU-side copy first.
       staging: device.createBuffer({
@@ -173,6 +201,25 @@ export class GpuPhysics {
       build: [a, b].map((read) => group(pipelines.build, [
         entry(0, buffers.uniforms), entry(1, read),
         entry(2, buffers.bucketHeads), entry(3, buffers.bucketNext),
+      ])),
+      sorted: [[a, b], [b, a]].map(([read, write]) => group(pipelines.sorted, [
+        entry(0, buffers.uniforms), entry(1, read), entry(2, write), entry(3, buffers.profile),
+        entry(4, buffers.bucketCounts), entry(5, buffers.bucketStarts),
+        entry(6, buffers.sortedParticles), entry(7, buffers.sortedIds),
+      ])),
+      sortCount: [a, b].map((read) => group(pipelines.sortCount, [
+        entry(0, buffers.uniforms), entry(1, read),
+        entry(2, buffers.bucketCounts), entry(3, buffers.rankInBucket),
+      ])),
+      scanBlocks: [group(pipelines.scanBlocks, [
+        entry(0, buffers.uniforms), entry(1, buffers.bucketCounts), entry(2, buffers.bucketStarts),
+      ])],
+      scanSums: [group(pipelines.scanSums, [
+        entry(0, buffers.uniforms), entry(1, buffers.bucketStarts),
+      ])],
+      scatter: [a, b].map((read) => group(pipelines.scatter, [
+        entry(0, buffers.uniforms), entry(1, read), entry(2, buffers.bucketStarts),
+        entry(3, buffers.rankInBucket), entry(4, buffers.sortedParticles), entry(5, buffers.sortedIds),
       ])),
       snap: [a, b].map((particles) => group(pipelines.snap, [
         entry(0, buffers.uniforms), entry(1, particles),
@@ -249,25 +296,34 @@ export class GpuPhysics {
     this.#writeUniforms(dt / substeps);
 
     const workgroups = Math.ceil(this.count / WORKGROUP_SIZE);
-    const useGrid = this.broadphase === 'grid';
+    const bp = this.broadphase;
     const encoder = device.createCommandEncoder({ label: 'physics' });
+    // Each dispatch below sees everything the previous one wrote: WebGPU
+    // puts a barrier between dispatches that share a buffer, even within
+    // one pass.
+    const dispatch = (pass, name, groups, x) => {
+      pass.setPipeline(pipelines[name]);
+      pass.setBindGroup(0, groups);
+      pass.dispatchWorkgroups(x);
+    };
 
     for (let s = 0; s < substeps; s++) {
-      if (useGrid) {
-        // Empty the hash table, then refill it from the current positions.
-        encoder.clearBuffer(buffers.bucketHeads);
-        const build = encoder.beginComputePass({ label: 'grid-build' });
-        build.setPipeline(pipelines.build);
-        build.setBindGroup(0, bindGroups.build[this.current]);
-        build.dispatchWorkgroups(workgroups);
-        build.end();
+      const now = this.current;
+      // Empty the table, then refill it from the current positions.
+      if (bp === 'grid') encoder.clearBuffer(buffers.bucketHeads);
+      if (bp === 'sorted') encoder.clearBuffer(buffers.bucketCounts);
+      const pass = encoder.beginComputePass({ label: `physics-step-${bp}` });
+      if (bp === 'grid') {
+        dispatch(pass, 'build', bindGroups.build[now], workgroups);
+      } else if (bp === 'sorted') {
+        dispatch(pass, 'sortCount', bindGroups.sortCount[now], workgroups);
+        dispatch(pass, 'scanBlocks', bindGroups.scanBlocks[0], scanBlocks(this.grid.tableSize));
+        dispatch(pass, 'scanSums', bindGroups.scanSums[0], 1);
+        dispatch(pass, 'scatter', bindGroups.scatter[now], workgroups);
       }
-      const pass = encoder.beginComputePass({ label: 'physics-step' });
-      pass.setPipeline(useGrid ? pipelines.grid : pipelines.brute);
-      pass.setBindGroup(0, (useGrid ? bindGroups.grid : bindGroups.brute)[this.current]);
-      pass.dispatchWorkgroups(workgroups);
+      dispatch(pass, bp, bindGroups[bp][now], workgroups);
       pass.end();
-      this.current = 1 - this.current;
+      this.current = 1 - now;
     }
 
     if (copyTarget) this.#encodeCopy(encoder, copyTarget);
@@ -359,18 +415,24 @@ export class GpuPhysics {
     }
   }
 
-  /** Bytes of GPU memory this configuration uses, for the stats readout. */
+  /**
+   * Bytes of GPU memory allocated, for the stats readout. Every search's
+   * buffers exist all the time, so the switch between them is instant.
+   */
   get memoryBytes() {
     if (!this.buffers) return 0;
-    const b = this.buffers;
-    return b.particles[0].size * 3 + b.bucketHeads.size + b.bucketNext.size + b.profile.size;
+    let total = 0;
+    for (const [name, value] of Object.entries(this.buffers)) {
+      for (const buffer of name === 'particles' ? value : [value]) total += buffer.size;
+    }
+    return total;
   }
 
   destroyBuffers() {
     if (!this.buffers) return;
     const b = this.buffers;
-    for (const buffer of [...b.particles, b.uniforms, b.profile, b.bucketHeads, b.bucketNext, b.staging]) {
-      buffer.destroy();
+    for (const [name, value] of Object.entries(b)) {
+      for (const buffer of name === 'particles' ? value : [value]) buffer.destroy();
     }
     this.buffers = null;
     this.readPending = false;

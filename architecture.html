@@ -61,7 +61,7 @@ a { color: var(--accent); }
       <span class="badge">WGSL compute</span>
       <span class="badge">TSL materials</span>
       <span class="badge">No build step</span>
-      <span class="badge">78 node + 22 GPU tests</span>
+      <span class="badge">81 node + 33 GPU tests</span>
     </div>
   </div>
 
@@ -125,8 +125,8 @@ graph TD
     <tr><th>Swift file</th><th>Web module</th><th>What changed</th></tr>
     <tr><td><code>SandGeometry.swift</code></td><td><code>models/hourglassProfile.js</code></td><td>The profile is a value returned by <code>createProfile()</code>, not static state.</td></tr>
     <tr><td><code>GranularSimulation.swift</code></td><td><code>physics/cpuSimulation.js</code>, <code>models/packing.js</code></td><td>State is one <code>Float32Array</code> in the shared layout.</td></tr>
-    <tr><td><code>ParticlePhysics.metal</code></td><td><code>physics/shaders.js</code></td><td>WGSL. Two neighbour-search flavours. No mesh expansion kernel.</td></tr>
-    <tr><td><code>MetalPhysicsEngine.swift</code></td><td><code>physics/gpuPhysics.js</code></td><td>Asynchronous. One submit per frame. Hash grid buffers added.</td></tr>
+    <tr><td><code>ParticlePhysics.metal</code></td><td><code>physics/shaders.js</code></td><td>WGSL. Three neighbour-search flavours. Sort passes for the sorted grid. No mesh expansion kernel.</td></tr>
+    <tr><td><code>MetalPhysicsEngine.swift</code></td><td><code>physics/gpuPhysics.js</code></td><td>Asynchronous. One submit per frame. Hash grid and sorted grid buffers added.</td></tr>
     <tr><td><code>HourglassScene.swift</code></td><td><code>scene/hourglassScene.js</code></td><td>Instanced drawing replaces per-particle nodes and expanded meshes.</td></tr>
     <tr><td><code>HourglassSceneView.swift</code> (Coordinator)</td><td><code>main.js</code></td><td>One thread, so no lock.</td></tr>
     <tr><td><code>TimerViewModel.swift</code></td><td><code>services/timerModel.js</code>, <code>services/settingsStore.js</code></td><td>Split into timing and persistence.</td></tr>
@@ -183,9 +183,14 @@ sequenceDiagram
   E->>Q: writeBuffer(uniforms)
   Note over E: one command encoder
   loop each substep
-    E->>E: clearBuffer(bucket counts)
-    E->>E: pass: buildGrid
-    E->>E: pass: physicsStep, A to B
+    alt Grid
+      E->>E: clearBuffer(list heads)
+      E->>E: dispatch: buildGrid
+    else Sorted
+      E->>E: clearBuffer(bucket counts)
+      E->>E: dispatch: count, scan blocks, scan sums, scatter
+    end
+    E->>E: dispatch: physicsStep, A to B
     E->>E: swap A and B
   end
   E->>E: copyBufferToBuffer(particles to vertex buffer)
@@ -217,7 +222,7 @@ graph TD
   damp --> counter["Update sleep counter"]
   counter --> write["Write my particle"]
     </pre>
-    <div class="caption">Every thread reads the same snapshot and writes only its own particle. The three "neighbours" steps are where brute force and the grid differ.</div>
+    <div class="caption">Every thread reads the same snapshot and writes only its own particle. The three "neighbours" steps are where the three searches differ.</div>
   </div>
 
   <h3>The spatial hash</h3>
@@ -227,7 +232,29 @@ graph TD
     <tr><td>Build</td><td>One thread per particle: hash its cell, <code>atomicExchange</code> itself onto the front of that bucket's linked list.</td></tr>
     <tr><td>Lookup</td><td>For each of the 27 cells around me: hash it, skip a bucket already walked, follow the list to its end.</td></tr>
   </table>
-  <p>Table size is the next power of two above twice the particle count, so memory follows the count and not the volume of the glass.</p>
+  <p>Table size is the next power of two above twice the particle count, so memory follows the count and not the volume of the glass. A walk stops after 32 entries (<code>BUCKET_WALK_LIMIT</code>), which only an over-full cell at the neck ever reaches.</p>
+
+  <h3>The sorted grid</h3>
+  <p>Same cells, same hash, same table. Instead of linked lists, the grains are copied into bucket order every substep, so each bucket is one contiguous range.</p>
+  <div class="diagram">
+    <pre class="mermaid">
+graph TD
+  P["particles (A or B)<br/>never reordered"] -->|"count:<br/>rank = atomicAdd(counts[b], 1)"| C["bucketCounts<br/>rankInBucket"]
+  C -->|"scan blocks:<br/>1,024 buckets per workgroup"| S1["bucketStarts<br/>start within block<br/>+ one total per block"]
+  S1 -->|"scan sums:<br/>one workgroup"| S2["bucketStarts<br/>start within block<br/>+ start of each block"]
+  S2 -->|"scatter:<br/>slot = start + rank"| SP["sortedParticles<br/>sortedIds"]
+  SP -->|"physics: thread k takes<br/>grain sortedIds[k],<br/>neighbours read as ranges"| O["particles (B or A)<br/>written at the grain's own index"]
+    </pre>
+    <div class="caption">The particle buffers keep their order, so a grain's index (its colour, its sleep stagger, its sweep order) never changes. Only the copy is sorted.</div>
+  </div>
+  <table>
+    <tr><th></th><th>Grid (lists)</th><th>Sorted</th></tr>
+    <tr><td>Dispatches per substep</td><td>2 + a clear</td><td>5 + a clear</td></tr>
+    <tr><td>Reading a bucket</td><td>pointer chase: each load waits for the last</td><td>a range: loads are independent and adjacent</td></tr>
+    <tr><td>Thread order</td><td>grain index</td><td>bucket order, so a workgroup covers a few cells</td></tr>
+    <tr><td>Over 32 in a bucket</td><td>the first 32 in the list</td><td>32 spread evenly along the range, random start</td></tr>
+    <tr><td>Extra memory, 200,000 grains</td><td>about 3 MB</td><td>about 12 MB</td></tr>
+  </table>
 
   <h2>Timer</h2>
   <div class="diagram">
@@ -256,6 +283,20 @@ graph TD
   container --> sand["Sand: icosphere x N instances<br/>positionNode = local * radius + position"]
     </pre>
     <div class="caption">Camera and lights sit outside the container, so they stay put while the hourglass turns.</div>
+  </div>
+
+  <h2>Deploy</h2>
+  <div class="diagram">
+    <pre class="mermaid">
+graph LR
+  push["push to main"] --> test["node --test"]
+  test --> site["assemble _site/"]
+  site --> v["copy js/ and css/ to v/(short sha)/"]
+  v --> sed["rewrite index.html and gpu-tests.html<br/>to point into v/(short sha)/<br/>stamp BUILD with time and commit"]
+  sed --> guard["grep guards: fail if a rewrite missed"]
+  guard --> pages["deploy to GitHub Pages"]
+    </pre>
+    <div class="caption">Pages caches every file for ten minutes. A new folder per commit gives every module a new URL, so a browser can never run a mix of two deploys.</div>
   </div>
 
   <footer>
