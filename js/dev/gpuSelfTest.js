@@ -124,6 +124,26 @@ const TESTS = {
     return `all on the floor (highest y ${highest.toFixed(3)})`;
   },
 
+  async 'a grain against the side of the glass does not stick there'(engine, bp) {
+    // The wall of the lower bulb leans in only slightly below its widest
+    // point. That is not a ledge: a grain touching it must still fall.
+    const r = 0.0056;
+    const count = 2;
+    const profile = createProfile(neckRadiusForParticle(r));
+    const table = profile.buildLookupTable();
+    const y = -0.36;
+    const wall = table[Math.round((y + 0.5) * 255)] - r;      // touching the glass
+    const data = new Float32Array(count * STRIDE);
+    data.set([wall, y, 0, r, 0, 0, 0, 40], 0);                // asleep on the wall
+    data.set([0, y, -wall, r, 0, 0, 0, 0], STRIDE);           // awake and at rest on the wall
+    configure(engine, bp, count, r, data);
+    for (let i = 0; i < 240; i++) engine.step(1 / 120);
+    const p = await read(engine);
+    const highest = Math.max(p[1], p[STRIDE + 1]);
+    expect(highest < -0.44, `a grain is still on the wall at y=${highest.toFixed(3)}`);
+    return `both at the bottom (highest y ${highest.toFixed(3)})`;
+  },
+
   async 'the pile comes to rest level and centred'(engine, bp) {
     // The glass is symmetric, so the settled pile must be too. Two earlier
     // grids failed this: one swept neighbours in a fixed direction and left

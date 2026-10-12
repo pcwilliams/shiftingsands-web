@@ -34,7 +34,7 @@ async function requestDevice() {
 
 // Shown in Stats, so it is obvious which deploy a browser has loaded
 // (GitHub Pages lets browsers cache files for ten minutes). Bump on each push.
-const BUILD = '12 Oct 09:10';
+const BUILD = '12 Oct 09:25';
 
 async function main() {
   const args = parseLaunchArgs(location.search);

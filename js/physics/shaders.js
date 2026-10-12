@@ -215,7 +215,11 @@ fn onFloor(pos: vec3f, radius: f32) -> bool {
 fn onGlassSlope(pos: vec3f, radius: f32) -> bool {
   let here = glassRadius(pos.y);
   let touching = length(pos.xz) > here - radius * 1.1;
-  return touching && glassRadius(pos.y - radius) < here - radius * 0.05;
+  // Only a real ledge counts: the glass must come in by more than half a
+  // radius over one radius of height, which is true of the rounded rim just
+  // above the floor and nowhere else. The side of the bulb leans in a little
+  // below its widest point, but a grain cannot rest on that.
+  return touching && glassRadius(pos.y - radius) < here - radius * 0.5;
 }
 
 // delta = my centre minus the other grain's; dist = its length.

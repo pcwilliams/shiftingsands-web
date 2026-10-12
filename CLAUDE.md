@@ -30,7 +30,7 @@ reference, except for the deliberate differences listed below.
   `new THREE.WebGPURenderer({ device })`.
 - **Persistence:** `localStorage`, keys prefixed `shiftingsands.`.
 - **Tests:** Node's built-in runner (`node --test`), 78 tests, zero
-  dependencies; plus 20 in-browser GPU tests (`gpu-tests.html`).
+  dependencies; plus 22 in-browser GPU tests (`gpu-tests.html`).
 - **Zero npm dependencies.** `package.json` exists for `"type": "module"`
   and the `npm test` alias.
 
@@ -303,7 +303,10 @@ frame. Two-phase start: `startFlip()` → scene flip (1.2 s, smoothstep) →
   holds itself up for ever (seen on an iPhone at 20,000 grains; a
   constructed sleeping clump hangs in both searches). Here
   `hasSupport` and the deep-sleep check require the floor (`onFloor`),
-  glass sloping inwards below the grain (`onGlassSlope`), or a grain
+  glass sloping steeply inwards below the grain (`onGlassSlope`: more
+  than half a radius per radius of height, which only the rim by the
+  floor is; a gentler threshold stuck grains to the side of the bulb
+  below its widest point), or a grain
   whose centre is lower by more than a quarter of the separation
   (`holdsMeUp`). Piles still settle fully (19,999 of 20,000 asleep).
 - **No SSAO, depth of field or shadows.** Flat Lambert lighting only.
@@ -332,8 +335,9 @@ Node (78): `perfHistory` (8), `geometry` (10), `packing` (10), `cpuPhysics` (11,
 ports of the app's CPU tests), `grid` (8), `config` (10), `timer` (8),
 `settings` (13).
 
-Browser (20, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
+Browser (22, `gpu-tests.html`; `?only=text` filters by name): gravity, floor, flip transform, drain,
 settle-and-sleep, wake-on-support-loss, mid-air-clump-falls,
+nothing-sticks-to-the-side-wall,
 pile-rests-level-and-centred and a
 5,000-grain containment run,
 each for `brute` and `grid`, plus "brute force and grid agree" and "a

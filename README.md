@@ -1,6 +1,6 @@
 # Shifting Sands (web)
 
-![three.js](https://img.shields.io/badge/three.js-r186%20WebGPU-black) ![WGSL](https://img.shields.io/badge/physics-WGSL%20compute-d9a441) ![No build step](https://img.shields.io/badge/build-none-555) ![Tests](https://img.shields.io/badge/tests-78%20node%20%2B%2020%20GPU-2ea043)
+![three.js](https://img.shields.io/badge/three.js-r186%20WebGPU-black) ![WGSL](https://img.shields.io/badge/physics-WGSL%20compute-d9a441) ![No build step](https://img.shields.io/badge/build-none-555) ![Tests](https://img.shields.io/badge/tests-78%20node%20%2B%2022%20GPU-2ea043)
 
 An hourglass timer for the browser with a real-time granular physics
 simulation. Golden sand grains pour through a glass hourglass built
